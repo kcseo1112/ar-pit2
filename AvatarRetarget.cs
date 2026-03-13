@@ -111,18 +111,18 @@ public class AvatarRetarget : MonoBehaviour
             }
         }
 
-        // 상체: world 방식
-        RotateBoneWorld(spine, joints[0], joints[12], spineAxis);
-        RotateBoneWorld(neck, joints[12], joints[15], neckAxis);
-        RotateBoneWorld(head, joints[12], joints[15], headAxis);
+        // ===== 상체: 첫 번째 코드 방식 =====
+        RotateBoneUpperWorld(spine, joints[0], joints[12], spineAxis);
+        RotateBoneUpperWorld(neck, joints[12], joints[15], neckAxis);
+        RotateBoneUpperWorld(head, joints[12], joints[15], headAxis);
 
-        RotateBoneWorld(leftUpperArm, joints[16], joints[18], leftUpperArmAxis);
-        RotateBoneWorld(leftLowerArm, joints[18], joints[20], leftLowerArmAxis);
+        RotateBoneUpperWorld(leftUpperArm, joints[16], joints[18], leftUpperArmAxis);
+        RotateBoneUpperWorld(leftLowerArm, joints[18], joints[20], leftLowerArmAxis);
 
-        RotateBoneWorld(rightUpperArm, joints[17], joints[19], rightUpperArmAxis);
-        RotateBoneWorld(rightLowerArm, joints[19], joints[21], rightLowerArmAxis);
+        RotateBoneUpperWorld(rightUpperArm, joints[17], joints[19], rightUpperArmAxis);
+        RotateBoneUpperWorld(rightLowerArm, joints[19], joints[21], rightLowerArmAxis);
 
-        // 하체: local 방식
+        // ===== 하체: local 방식 유지 =====
         RotateBoneLocal(leftUpperLeg, joints[1], joints[4], leftUpperLegAxis);
         RotateBoneLocal(leftLowerLeg, joints[4], joints[7], leftLowerLegAxis);
 
@@ -130,14 +130,14 @@ public class AvatarRetarget : MonoBehaviour
         RotateBoneLocal(rightLowerLeg, joints[5], joints[8], rightLowerLegAxis);
     }
 
-    void RotateBoneWorld(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
+    void RotateBoneUpperWorld(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
     {
-        if (bone == null || !initialWorldRotations.ContainsKey(bone))
+        if (bone == null)
             return;
 
         Vector3 targetDir = (end - start).normalized;
         Quaternion correction = Quaternion.FromToRotation(modelAxis.normalized, targetDir);
-        bone.rotation = correction * initialWorldRotations[bone];
+        bone.rotation = correction;
     }
 
     void RotateBoneLocal(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
