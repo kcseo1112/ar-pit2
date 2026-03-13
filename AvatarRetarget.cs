@@ -116,18 +116,32 @@ public class AvatarRetarget : MonoBehaviour
         RotateBoneUpperWorld(neck, joints[12], joints[15], neckAxis);
         RotateBoneUpperWorld(head, joints[12], joints[15], headAxis);
 
-        RotateBoneUpperWorld(leftUpperArm, joints[16], joints[18], leftUpperArmAxis);
-        RotateBoneUpperWorld(leftLowerArm, joints[18], joints[20], leftLowerArmAxis);
+        //RotateBoneUpperWorld(leftUpperArm, joints[16], joints[18], leftUpperArmAxis);
+        //RotateBoneUpperWorld(leftLowerArm, joints[18], joints[20], leftLowerArmAxis);
 
-        RotateBoneUpperWorld(rightUpperArm, joints[17], joints[19], rightUpperArmAxis);
-        RotateBoneUpperWorld(rightLowerArm, joints[19], joints[21], rightLowerArmAxis);
+        //RotateBoneUpperWorld(rightUpperArm, joints[17], joints[19], rightUpperArmAxis);
+        //RotateBoneUpperWorld(rightLowerArm, joints[19], joints[21], rightLowerArmAxis);
+
+        // ===== 상체: 팔 좌우 교체 =====
+        RotateBoneUpperWorld(leftUpperArm, joints[17], joints[19], leftUpperArmAxis);
+        RotateBoneUpperWorld(leftLowerArm, joints[19], joints[21], leftLowerArmAxis);
+
+        RotateBoneUpperWorld(rightUpperArm, joints[16], joints[18], rightUpperArmAxis); 
+        RotateBoneUpperWorld(rightLowerArm, joints[18], joints[20], rightLowerArmAxis);
 
         // ===== 하체: local 방식 유지 =====
-        RotateBoneLocal(leftUpperLeg, joints[1], joints[4], leftUpperLegAxis);
-        RotateBoneLocal(leftLowerLeg, joints[4], joints[7], leftLowerLegAxis);
+        //RotateBoneLocal(leftUpperLeg, joints[1], joints[4], leftUpperLegAxis);
+        //RotateBoneLocal(leftLowerLeg, joints[4], joints[7], leftLowerLegAxis);
 
-        RotateBoneLocal(rightUpperLeg, joints[2], joints[5], rightUpperLegAxis);
-        RotateBoneLocal(rightLowerLeg, joints[5], joints[8], rightLowerLegAxis);
+        //RotateBoneLocal(rightUpperLeg, joints[2], joints[5], rightUpperLegAxis);
+        //RotateBoneLocal(rightLowerLeg, joints[5], joints[8], rightLowerLegAxis);
+
+        // ===== 하체: 좌우 교체 =====
+        RotateBoneLocal(leftUpperLeg, joints[2], joints[5], leftUpperLegAxis);
+        RotateBoneLocal(leftLowerLeg, joints[5], joints[8], leftLowerLegAxis);
+
+        RotateBoneLocal(rightUpperLeg, joints[1], joints[4], rightUpperLegAxis);
+        RotateBoneLocal(rightLowerLeg, joints[4], joints[7], rightLowerLegAxis);
     }
 
     void RotateBoneUpperWorld(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
@@ -150,5 +164,6 @@ public class AvatarRetarget : MonoBehaviour
 
         Quaternion correction = Quaternion.FromToRotation(modelAxis.normalized, localDir);
         bone.localRotation = correction * initialLocalRotations[bone];
+        
     }
 }
