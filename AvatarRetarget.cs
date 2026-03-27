@@ -46,7 +46,6 @@ public class AvatarRetarget : MonoBehaviour
     public Vector3 rightUpperLegAxis = Vector3.down;
     public Vector3 rightLowerLegAxis = Vector3.up;
 
-    private Dictionary<Transform, Quaternion> initialWorldRotations = new();
     private Dictionary<Transform, Quaternion> initialLocalRotations = new();
 
     void Start()
@@ -70,10 +69,6 @@ public class AvatarRetarget : MonoBehaviour
     void SaveInitial(Transform bone)
     {
         if (bone == null) return;
-
-        if (!initialWorldRotations.ContainsKey(bone))
-            initialWorldRotations[bone] = bone.rotation;
-
         if (!initialLocalRotations.ContainsKey(bone))
             initialLocalRotations[bone] = bone.localRotation;
     }
@@ -85,58 +80,56 @@ public class AvatarRetarget : MonoBehaviour
 
         Vector3 pelvis = joints[0];
         Vector3 neckPos = joints[12];
+        Vector3 headPos = joints[15];
+
         Vector3 leftHipPos = joints[1];
         Vector3 rightHipPos = joints[2];
 
-        Vector3 spineDir = (neckPos - pelvis).normalized;
+        Vector3 leftShoulderPos = joints[16];
+        Vector3 rightShoulderPos = joints[17];
+
+        // 공통 up
+        Vector3 spineUp = (neckPos - pelvis).normalized;
+
+        // 골반 기준 forward
         Vector3 hipRight = (rightHipPos - leftHipPos).normalized;
-        Vector3 bodyForward = Vector3.Cross(hipRight, spineDir).normalized;
+        Vector3 bodyForward = Vector3.Cross(hipRight, spineUp).normalized;
 
         if (flipBodyForward)
             bodyForward = -bodyForward;
 
-        if (rotateHips && hips != null)
-        {
-            Quaternion bodyRot = Quaternion.LookRotation(bodyForward, spineDir);
-            bodyRot *= Quaternion.Euler(0f, bodyYawOffset, 0f);
+        bodyForward = Quaternion.Euler(0f, bodyYawOffset, 0f) * bodyForward;
 
-            if (hips.parent != null)
-            {
-                Quaternion parentRot = hips.parent.rotation;
-                hips.localRotation = Quaternion.Inverse(parentRot) * bodyRot;
-            }
-            else
-            {
-                hips.rotation = bodyRot;
-            }
-        }
+        // 1. 골반 회전
+        RotateBoneLookLocal(hips, bodyForward, spineUp);
 
-        // ===== 상체: 첫 번째 코드 방식 =====
-        RotateBoneUpperWorld(spine, joints[0], joints[12], spineAxis);
-        RotateBoneUpperWorld(neck, joints[12], joints[15], neckAxis);
-        RotateBoneUpperWorld(head, joints[12], joints[15], headAxis);
+        // 2. 몸통 회전(어깨선 사용)
+        Vector3 shoulderRight = (rightShoulderPos - leftShoulderPos).normalized;
+        Vector3 chestUp = (neckPos - pelvis).normalized;
+        Vector3 chestForward = Vector3.Cross(shoulderRight, chestUp).normalized;
 
-        //RotateBoneUpperWorld(leftUpperArm, joints[16], joints[18], leftUpperArmAxis);
-        //RotateBoneUpperWorld(leftLowerArm, joints[18], joints[20], leftLowerArmAxis);
+        if (flipBodyForward)
+            chestForward = -chestForward;
 
-        //RotateBoneUpperWorld(rightUpperArm, joints[17], joints[19], rightUpperArmAxis);
-        //RotateBoneUpperWorld(rightLowerArm, joints[19], joints[21], rightLowerArmAxis);
+        chestForward = Quaternion.Euler(0f, bodyYawOffset, 0f) * chestForward;
 
-        // ===== 상체: 팔 좌우 교체 =====
-        RotateBoneUpperWorld(leftUpperArm, joints[17], joints[19], leftUpperArmAxis);
-        RotateBoneUpperWorld(leftLowerArm, joints[19], joints[21], leftLowerArmAxis);
+        RotateBoneLookLocal(spine, chestForward, chestUp);
 
-        RotateBoneUpperWorld(rightUpperArm, joints[16], joints[18], rightUpperArmAxis); 
-        RotateBoneUpperWorld(rightLowerArm, joints[18], joints[20], rightLowerArmAxis);
+        // 3. 목 회전 - 몸통 회전을 어느 정도 따라가게
+        Vector3 neckUpDir = (headPos - neckPos).normalized;
+        RotateBoneLookLocal(neck, chestForward, neckUpDir);
 
-        // ===== 하체: local 방식 유지 =====
-        //RotateBoneLocal(leftUpperLeg, joints[1], joints[4], leftUpperLegAxis);
-        //RotateBoneLocal(leftLowerLeg, joints[4], joints[7], leftLowerLegAxis);
+        // 4. 머리 - 일단 목과 같은 forward를 공유
+        RotateBoneLookLocal(head, chestForward, neckUpDir);
 
-        //RotateBoneLocal(rightUpperLeg, joints[2], joints[5], rightUpperLegAxis);
-        //RotateBoneLocal(rightLowerLeg, joints[5], joints[8], rightLowerLegAxis);
+        // 팔
+        RotateBoneUpperLocal(leftUpperArm, joints[17], joints[19], leftUpperArmAxis);
+        RotateBoneUpperLocal(leftLowerArm, joints[19], joints[21], leftLowerArmAxis);
 
-        // ===== 하체: 좌우 교체 =====
+        RotateBoneUpperLocal(rightUpperArm, joints[16], joints[18], rightUpperArmAxis);
+        RotateBoneUpperLocal(rightLowerArm, joints[18], joints[20], rightLowerArmAxis);
+
+        // 다리
         RotateBoneLocal(leftUpperLeg, joints[2], joints[5], leftUpperLegAxis);
         RotateBoneLocal(leftLowerLeg, joints[5], joints[8], leftLowerLegAxis);
 
@@ -144,14 +137,34 @@ public class AvatarRetarget : MonoBehaviour
         RotateBoneLocal(rightLowerLeg, joints[4], joints[7], rightLowerLegAxis);
     }
 
-    void RotateBoneUpperWorld(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
+    void RotateBoneLookLocal(Transform bone, Vector3 forward, Vector3 up)
     {
-        if (bone == null)
+        if (bone == null || !initialLocalRotations.ContainsKey(bone))
             return;
 
-        Vector3 targetDir = (end - start).normalized;
-        Quaternion correction = Quaternion.FromToRotation(modelAxis.normalized, targetDir);
-        bone.rotation = correction;
+        Quaternion targetWorld = Quaternion.LookRotation(forward.normalized, up.normalized);
+
+        if (bone.parent != null)
+        {
+            Quaternion localTarget = Quaternion.Inverse(bone.parent.rotation) * targetWorld;
+            bone.localRotation = localTarget * initialLocalRotations[bone];
+        }
+        else
+        {
+            bone.rotation = targetWorld;
+        }
+    }
+
+    void RotateBoneUpperLocal(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
+    {
+        if (bone == null || bone.parent == null || !initialLocalRotations.ContainsKey(bone))
+            return;
+
+        Vector3 worldDir = (end - start).normalized;
+        Vector3 localDir = bone.parent.InverseTransformDirection(worldDir).normalized;
+
+        Quaternion correction = Quaternion.FromToRotation(modelAxis.normalized, localDir);
+        bone.localRotation = correction * initialLocalRotations[bone];
     }
 
     void RotateBoneLocal(Transform bone, Vector3 start, Vector3 end, Vector3 modelAxis)
@@ -164,6 +177,5 @@ public class AvatarRetarget : MonoBehaviour
 
         Quaternion correction = Quaternion.FromToRotation(modelAxis.normalized, localDir);
         bone.localRotation = correction * initialLocalRotations[bone];
-        
     }
 }
