@@ -1,0 +1,85 @@
+Project status summary
+Date: 2026-04-28
+Project: Realtime MediaPipe to Unity UDP sender
+
+1. Current state
+- The project has been migrated away from the older ROMP-based approach.
+- The active runtime path is now centered on `mp_pose_sender.py`.
+- Body tracking uses MediaPipe Pose Landmarker.
+- Head rotation uses MediaPipe Face Landmarker.
+- Output is sent to Unity over UDP.
+- The current camera input path is standard OpenCV webcam capture.
+
+2. Current runtime structure
+- Python sender: `mp_pose_sender.py`
+- Environment check script: `check_env.py`
+- Required model files:
+  - `models/face_landmarker.task`
+  - `models/pose_landmarker_full.task`
+- Python dependencies:
+  - `mediapipe`
+  - `numpy`
+  - `opencv-python`
+
+3. Data flow summary
+- Camera frame is read through OpenCV.
+- RGB frame is passed to MediaPipe Pose for body landmark estimation.
+- Face frame is passed to MediaPipe Face Landmarker for head rotation extraction.
+- Body output is converted from MediaPipe 33 landmarks to a fixed SMPL-style 24-joint layout.
+- UDP body packets are sent to port `12000`.
+- UDP head rotation packets are sent to port `5006`.
+
+4. Unity-side contract
+- Unity expects a JSON array with 24 joints for body retargeting.
+- The sender keeps a fixed joint order to match the Unity receiver scripts.
+- The current pipeline already works without D435i-specific code.
+
+5. Assessment of the current implementation
+- The MediaPipe-based pipeline is the current stable base.
+- The most important result of the recent update is that the project no longer depends on the previous ROMP runtime for the main motion path.
+- At this stage, keeping the pipeline simple is a valid engineering choice.
+
+6. D435i application decision for now
+- D435i depth integration is postponed.
+- Reason: depth integration does not automatically improve pose estimation quality.
+- The current project would only benefit if depth is used as an additional correction signal, not as a drop-in replacement for MediaPipe.
+
+7. What D435i actually provides
+- RGB color stream
+- Depth stream
+- IMU data (accelerometer and gyroscope)
+- Camera calibration data such as intrinsics and extrinsics
+
+8. Why D435i is not being applied immediately
+- Simply replacing a webcam with D435i RGB would not produce a major accuracy gain.
+- The main value of D435i is in depth-based correction, which requires extra integration work.
+- That integration would increase system complexity and testing cost.
+- The current priority is to preserve a working MediaPipe-based retargeting pipeline.
+
+9. Where D435i could help later
+- Stabilizing forward and backward body position
+- Reducing scale drift as the subject moves toward or away from the camera
+- Improving pelvis, head, hand, and foot depth estimates
+- Helping with foot contact and floor-plane constraints
+- Reducing some errors during self-occlusion
+
+10. Where D435i is unlikely to help enough on its own
+- Fine joint rotation accuracy for shoulders, elbows, and knees
+- Full recovery of hidden joints
+- High-quality retargeting improvement without additional filtering and kinematic constraints
+
+11. Recommended future integration direction
+- Keep MediaPipe as the primary detector.
+- If D435i is added later, use it only as a depth-assisted correction layer.
+- Apply depth selectively to major anchor joints first:
+  - pelvis
+  - head
+  - hands
+  - feet
+- Consider floor-contact stabilization only after the basic depth fusion is reliable.
+- Treat IMU as a lower-priority feature unless the camera itself is moving.
+
+12. Final decision as of this snapshot
+- Continue with the current MediaPipe pipeline.
+- Do not spend implementation time on D435i depth fusion yet.
+- Revisit D435i only if retargeting quality shows clear depth-related failure cases in testing.
