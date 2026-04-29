@@ -15,8 +15,8 @@ public class PoseReceiverUDP : MonoBehaviour
     public JointVisualizer jointVisualizer;
 
     [Header("Avatar")]
+    public OutfitManager outfitManager;
     public AvatarRetarget avatar;
-    public ClothesRetarget clothes;
 
     private UdpClient client;
     private Thread receiveThread;
@@ -117,14 +117,15 @@ public class PoseReceiverUDP : MonoBehaviour
         if (jointVisualizer != null)
             jointVisualizer.UpdateJoints(jointsCopy);
 
-        if (avatar != null)
+        if (outfitManager != null)
+        {
+            outfitManager.ApplyPose(jointsCopy, screenShoulderWidth);
+        }
+        else if (avatar != null)
         {
             avatar.ApplyPose(jointsCopy);
             avatar.ApplyBodyFit(jointsCopy, screenShoulderWidth);
         }
-
-        if (clothes != null)
-            clothes.ApplyBodyFit(jointsCopy, screenShoulderWidth);
     }
 
     // =========================

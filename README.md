@@ -19,6 +19,7 @@ Reference Unity scripts were copied into [unity_reference](/home/kangj/projects/
 - [PoseReceiverUDP.cs](/home/kangj/projects/realtime_mediapipe_d435i/unity_reference/PoseReceiverUDP.cs)
 - [JointVisualizer.cs](/home/kangj/projects/realtime_mediapipe_d435i/unity_reference/JointVisualizer.cs)
 - [AvatarRetarget.cs](/home/kangj/projects/realtime_mediapipe_d435i/unity_reference/AvatarRetarget.cs)
+- `OutfitManager.cs`
 
 Unity expects a JSON array shaped like:
 
@@ -38,6 +39,46 @@ screen-space shoulder width to `AvatarRetarget.cs` and, when present,
 `ClothesRetarget.cs`. `AvatarRetarget.cs` can use that value to scale the avatar
 root, so the body grows when the user moves closer to the camera and shrinks
 when the user moves away.
+
+## Unity Outfit Switching
+
+Use `OutfitManager.cs` as the single switching point for retargeted outfits.
+
+Recommended scene setup:
+
+- Add one empty GameObject named `OutfitManager`.
+- Attach `OutfitManager.cs` to it.
+- Add each outfit object to the `Outfits` array.
+- For each slot, assign:
+  - `Display Root`: the whole outfit GameObject to activate/deactivate.
+  - `Avatar`: the `AvatarRetarget` script on that outfit.
+- In `PoseReceiverUDP.cs`, assign only `Outfit Manager`.
+- Leave the legacy `Avatar` field empty unless you want a single fixed outfit fallback.
+
+At runtime, `OutfitManager` activates only the selected outfit and disables the
+other outfit roots and `AvatarRetarget` components. For manual testing, press
+`[` and `]` to switch outfits. Future gesture controls should call
+`SelectPrevious()`, `SelectNext()`, or `SelectOutfit(index)`.
+
+Suggested Unity asset layout for future cleanup:
+
+```text
+Assets/
+  Scripts/
+    AvatarRetarget.cs
+    PoseReceiverUDP.cs
+    OutfitManager.cs
+    JointVisualizer.cs
+  Outfits/
+    nomal_shirt/
+    shirt_skinning/
+    SUIT/
+    test_blue/
+  Scenes/
+```
+
+Move existing FBX/prefab files inside Unity Editor so Unity preserves `.meta`
+GUIDs and scene references.
 
 ## Joint Order
 
