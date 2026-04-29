@@ -306,6 +306,28 @@ def convert_to_unity_coordinates(joints_24: np.ndarray):
     return unity_joints
 
 
+def normalized_landmark_distance(landmarks, first_index: int, second_index: int) -> float:
+    first = landmarks[first_index]
+    second = landmarks[second_index]
+    dx = first.x - second.x
+    dy = first.y - second.y
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def build_body_fit_metric(pose_landmarks) -> Optional[list]:
+    if pose_landmarks is None or len(pose_landmarks) < 33:
+        return None
+
+    shoulder_width = normalized_landmark_distance(pose_landmarks, LEFT_SHOULDER, RIGHT_SHOULDER)
+    torso_length = normalized_landmark_distance(pose_landmarks, NOSE, LEFT_HIP)
+
+    if shoulder_width <= 0.0001:
+        return None
+
+    # Extra packet item after the 24 joints. Unity uses x as screen-space shoulder width.
+    return [float(shoulder_width), float(torso_length), 0.0]
+
+
 def open_camera(index: Optional[int]):
     backends = [
         ("CAP_DSHOW", cv2.CAP_DSHOW),
@@ -418,7 +440,13 @@ def main():
                     if pose_result.pose_world_landmarks:
                         smpl24 = convert_pose33_to_smpl24(pose_result.pose_world_landmarks[0])
                         if smpl24 is not None:
-                            body_msg = json.dumps(convert_to_unity_coordinates(smpl24)).encode("utf-8")
+                            body_payload = convert_to_unity_coordinates(smpl24)
+                            if pose_result.pose_landmarks:
+                                fit_metric = build_body_fit_metric(pose_result.pose_landmarks[0])
+                                if fit_metric is not None:
+                                    body_payload.append(fit_metric)
+
+                            body_msg = json.dumps(body_payload).encode("utf-8")
                             sock.sendto(body_msg, (UNITY_IP, BODY_PORT))
                             body_packet_count += 1
                             if (now - prev_body_print_time) >= BODY_PRINT_INTERVAL:

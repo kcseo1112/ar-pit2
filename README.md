@@ -8,6 +8,10 @@ This project sends body joints and head rotation to Unity over UDP.
 - Body UDP port: `12000`
 - Head UDP port: `5006`
 
+`mp_pose_sender.py` is the current main runtime path. The older
+`romp_face_udp_integrated.py` file is kept as a previous ROMP-based reference,
+but new body tracking and fitting work should be added to the MediaPipe sender.
+
 ## Unity Reference
 
 Reference Unity scripts were copied into [unity_reference](/home/kangj/projects/realtime_mediapipe_d435i/unity_reference).
@@ -22,7 +26,17 @@ Unity expects a JSON array shaped like:
 [[x,y,z],[x,y,z], ... 24 items ...]
 ```
 
-`PoseReceiverUDP.cs` parses exactly 24 joints, so the Python sender keeps a fixed 24-joint output.
+The first 24 items are always the fixed SMPL-style body joints. The sender may
+append one extra body-fit item after those joints:
+
+```json
+[[x,y,z], ... 24 joints ..., [screenShoulderWidth, screenTorsoLength, 0]]
+```
+
+`PoseReceiverUDP.cs` keeps the 24 joints for retargeting and passes the optional
+screen-space shoulder width to `ClothesRetarget.cs`. `ClothesRetarget.cs` uses
+that value to scale the clothing root, so the clothes grow when the user moves
+closer to the camera and shrink when the user moves away.
 
 ## Joint Order
 

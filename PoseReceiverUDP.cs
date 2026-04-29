@@ -9,13 +9,14 @@ using System.Globalization;
 public class PoseReceiverUDP : MonoBehaviour
 {
     [Header("UDP")]
-    public int port = 5005;
+    public int port = 12000;
 
     [Header("Reference")]
     public JointVisualizer jointVisualizer;
 
     [Header("Avatar")]
     public AvatarRetarget avatar;
+    public ClothesRetarget clothes;
 
     private UdpClient client;
     private Thread receiveThread;
@@ -23,6 +24,7 @@ public class PoseReceiverUDP : MonoBehaviour
     private readonly object lockObj = new object();
 
     private Vector3[] latestJoints = new Vector3[24];
+    private float latestScreenShoulderWidth = -1f;
     private bool hasNewData = false;
 
     private bool isRunning = false;
@@ -72,14 +74,15 @@ public class PoseReceiverUDP : MonoBehaviour
                     continue;
 
                 // 🔥 수동 파싱 (Unity API 사용 안함)
-                Vector3[] parsedJoints = ParseJsonManually(json);
+                ParsedPose parsedPose = ParseJsonManually(json);
 
-                if (parsedJoints == null)
+                if (parsedPose == null)
                     continue;
 
                 lock (lockObj)
                 {
-                    Array.Copy(parsedJoints, latestJoints, 24);
+                    Array.Copy(parsedPose.joints, latestJoints, 24);
+                    latestScreenShoulderWidth = parsedPose.screenShoulderWidth;
                     hasNewData = true;
                 }
             }
@@ -99,6 +102,7 @@ public class PoseReceiverUDP : MonoBehaviour
             return;
 
         Vector3[] jointsCopy = new Vector3[24];
+        float screenShoulderWidth;
 
         lock (lockObj)
         {
@@ -106,6 +110,7 @@ public class PoseReceiverUDP : MonoBehaviour
                 return;
 
             Array.Copy(latestJoints, jointsCopy, 24);
+            screenShoulderWidth = latestScreenShoulderWidth;
             hasNewData = false;
         }
 
@@ -113,13 +118,22 @@ public class PoseReceiverUDP : MonoBehaviour
             jointVisualizer.UpdateJoints(jointsCopy);
 
         if (avatar != null)
-            avatar.ApplyPose(jointsCopy);    
+            avatar.ApplyPose(jointsCopy);
+
+        if (clothes != null)
+            clothes.ApplyBodyFit(jointsCopy, screenShoulderWidth);
     }
 
     // =========================
     // JSON 수동 파서 (Unity API 없음)
     // =========================
-    private Vector3[] ParseJsonManually(string json)
+    private class ParsedPose
+    {
+        public Vector3[] joints;
+        public float screenShoulderWidth;
+    }
+
+    private ParsedPose ParseJsonManually(string json)
     {
         try
         {
@@ -145,7 +159,15 @@ public class PoseReceiverUDP : MonoBehaviour
                 result[i] = new Vector3(x, y, z);
             }
 
-            return result;
+            float screenShoulderWidth = -1f;
+            if (tokens.Length >= 75)
+                screenShoulderWidth = float.Parse(tokens[72], CultureInfo.InvariantCulture);
+
+            return new ParsedPose
+            {
+                joints = result,
+                screenShoulderWidth = screenShoulderWidth
+            };
         }
         catch
         {
