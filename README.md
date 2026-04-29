@@ -34,9 +34,10 @@ append one extra body-fit item after those joints:
 ```
 
 `PoseReceiverUDP.cs` keeps the 24 joints for retargeting and passes the optional
-screen-space shoulder width to `ClothesRetarget.cs`. `ClothesRetarget.cs` uses
-that value to scale the clothing root, so the clothes grow when the user moves
-closer to the camera and shrink when the user moves away.
+screen-space shoulder width to `AvatarRetarget.cs` and, when present,
+`ClothesRetarget.cs`. `AvatarRetarget.cs` can use that value to scale the avatar
+root, so the body grows when the user moves closer to the camera and shrinks
+when the user moves away.
 
 ## Joint Order
 

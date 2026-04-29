@@ -44,7 +44,9 @@ MAX_NUM_FACES = 1
 USE_SMOOTHING = True
 SMOOTHING_ALPHA = 0.8
 
-SHOW_WINDOW = False
+SHOW_WINDOW = True
+MIRROR_PREVIEW = True
+DRAW_POSE_LANDMARKS = True
 ENABLE_CONSOLE_LOG = False
 
 PRINT_INTERVAL = 0.3
@@ -128,6 +130,35 @@ SMPL_24_JOINT_NAMES = [
     "right_wrist",
     "left_hand",
     "right_hand",
+]
+
+POSE_CONNECTIONS = [
+    (LEFT_SHOULDER, RIGHT_SHOULDER),
+    (LEFT_SHOULDER, LEFT_ELBOW),
+    (LEFT_ELBOW, LEFT_WRIST),
+    (RIGHT_SHOULDER, RIGHT_ELBOW),
+    (RIGHT_ELBOW, RIGHT_WRIST),
+    (LEFT_SHOULDER, LEFT_HIP),
+    (RIGHT_SHOULDER, RIGHT_HIP),
+    (LEFT_HIP, RIGHT_HIP),
+    (LEFT_HIP, LEFT_KNEE),
+    (LEFT_KNEE, LEFT_ANKLE),
+    (LEFT_ANKLE, LEFT_HEEL),
+    (LEFT_HEEL, LEFT_FOOT_INDEX),
+    (RIGHT_HIP, RIGHT_KNEE),
+    (RIGHT_KNEE, RIGHT_ANKLE),
+    (RIGHT_ANKLE, RIGHT_HEEL),
+    (RIGHT_HEEL, RIGHT_FOOT_INDEX),
+    (LEFT_WRIST, LEFT_INDEX),
+    (LEFT_WRIST, LEFT_PINKY),
+    (LEFT_WRIST, LEFT_THUMB),
+    (RIGHT_WRIST, RIGHT_INDEX),
+    (RIGHT_WRIST, RIGHT_PINKY),
+    (RIGHT_WRIST, RIGHT_THUMB),
+    (NOSE, LEFT_EYE),
+    (NOSE, RIGHT_EYE),
+    (LEFT_EYE, LEFT_EAR),
+    (RIGHT_EYE, RIGHT_EAR),
 ]
 
 
@@ -328,6 +359,39 @@ def build_body_fit_metric(pose_landmarks) -> Optional[list]:
     return [float(shoulder_width), float(torso_length), 0.0]
 
 
+def draw_pose_landmarks(display: np.ndarray, pose_landmarks) -> None:
+    if not DRAW_POSE_LANDMARKS or pose_landmarks is None:
+        return
+
+    height, width = display.shape[:2]
+    points = []
+
+    for landmark in pose_landmarks:
+        visibility = float(getattr(landmark, "visibility", 1.0))
+        if visibility < BODY_VISIBILITY_THRESHOLD:
+            points.append(None)
+            continue
+
+        x = int(float(landmark.x) * width)
+        y = int(float(landmark.y) * height)
+        points.append((x, y))
+
+    for start_idx, end_idx in POSE_CONNECTIONS:
+        if start_idx >= len(points) or end_idx >= len(points):
+            continue
+
+        start = points[start_idx]
+        end = points[end_idx]
+        if start is None or end is None:
+            continue
+
+        cv2.line(display, start, end, (0, 255, 255), 2, cv2.LINE_AA)
+
+    for point in points:
+        if point is not None:
+            cv2.circle(display, point, 4, (0, 255, 0), -1, cv2.LINE_AA)
+
+
 def open_camera(index: Optional[int]):
     backends = [
         ("CAP_DSHOW", cv2.CAP_DSHOW),
@@ -414,6 +478,9 @@ def main():
                 now = time.time()
                 body_frame = frame
                 face_frame = cv2.flip(frame, 1)
+                pose_result = None
+                pose_detected = False
+                fit_metric = None
 
                 if FACE_SCALE != 1.0:
                     small_face_frame = cv2.resize(
@@ -436,6 +503,9 @@ def main():
                     rgb_body = cv2.cvtColor(body_frame, cv2.COLOR_BGR2RGB)
                     pose_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_body)
                     pose_result = pose_landmarker.detect_for_video(pose_image, int(now * 1000))
+
+                    if pose_result.pose_landmarks:
+                        pose_detected = True
 
                     if pose_result.pose_world_landmarks:
                         smpl24 = convert_pose33_to_smpl24(pose_result.pose_world_landmarks[0])
@@ -498,22 +568,43 @@ def main():
                     prev_head_send_time = now
 
                 if SHOW_WINDOW:
-                    display = face_frame.copy()
+                    display = body_frame.copy()
+                    if pose_result is not None and pose_result.pose_landmarks:
+                        draw_pose_landmarks(display, pose_result.pose_landmarks[0])
+
+                    if MIRROR_PREVIEW:
+                        display = cv2.flip(display, 1)
+
                     y_base = 40
+
+                    if pose_detected:
+                        cv2.putText(
+                            display, "Pose Detected", (20, y_base),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2,
+                        )
+                        y_base += 36
+
+                    if fit_metric is not None:
+                        cv2.putText(
+                            display, f"Shoulder Scale Metric: {fit_metric[0]:.4f}",
+                            (20, y_base),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+                        )
+                        y_base += 32
 
                     if face_detected:
                         cv2.putText(
                             display, "Face Detected", (20, y_base),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2,
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2,
                         )
-                        y_base += 40
+                        y_base += 36
 
                     if matrix_ok:
                         cv2.putText(
                             display, "Matrix OK", (20, y_base),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2,
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2,
                         )
-                        y_base += 40
+                        y_base += 32
 
                         cv2.putText(
                             display, f"Yaw   : {smoothed_yaw:7.2f}", (20, y_base + 20),
@@ -542,9 +633,9 @@ def main():
                 if key == 27:
                     break
 
-    except Exception:
-        print("ERROR OCCURRED IN MAIN LOOP")
-        traceback.print_exc()
+    except Exception as exc:
+        print(f"ERROR OCCURRED IN MAIN LOOP: {type(exc).__name__}: {exc}")
+        print(traceback.format_exc())
 
     finally:
         try:

@@ -118,7 +118,10 @@ public class PoseReceiverUDP : MonoBehaviour
             jointVisualizer.UpdateJoints(jointsCopy);
 
         if (avatar != null)
+        {
             avatar.ApplyPose(jointsCopy);
+            avatar.ApplyBodyFit(jointsCopy, screenShoulderWidth);
+        }
 
         if (clothes != null)
             clothes.ApplyBodyFit(jointsCopy, screenShoulderWidth);
