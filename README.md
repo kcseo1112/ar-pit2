@@ -60,6 +60,21 @@ other outfit roots and `AvatarRetarget` components. For manual testing, press
 `[` and `]` to switch outfits. Future gesture controls should call
 `SelectPrevious()`, `SelectNext()`, or `SelectOutfit(index)`.
 
+For separate top/bottom outfits:
+
+- Enable `Use Separated Outfits`.
+- Add tops to `Upper Outfits`.
+- Add bottoms to `Lower Outfits`.
+- Set `Current Upper Index` and `Current Lower Index`.
+- Press `Q` / `E` to switch tops during manual testing.
+- Press `A` / `D` to switch bottoms during manual testing.
+
+When separated mode is enabled, the legacy `Outfits` array is disabled at
+runtime and one upper outfit plus one lower outfit are active together. Gesture
+controls can later call `SelectUpper(index)`, `SelectLower(index)`,
+`SelectNextUpper()`, `SelectNextLower()`, `SelectPreviousUpper()`, or
+`SelectPreviousLower()`.
+
 Suggested Unity asset layout for future cleanup:
 
 ```text
