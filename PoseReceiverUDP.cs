@@ -25,6 +25,9 @@ public class PoseReceiverUDP : MonoBehaviour
 
     private Vector3[] latestJoints = new Vector3[24];
     private float latestScreenShoulderWidth = -1f;
+    private Vector2 latestRootPixel = new Vector2(-1f, -1f);
+    private float latestRootDepthMeters = -1f;
+    private Vector2 latestFrameSize = Vector2.zero;
     private bool hasNewData = false;
 
     private bool isRunning = false;
@@ -83,6 +86,9 @@ public class PoseReceiverUDP : MonoBehaviour
                 {
                     Array.Copy(parsedPose.joints, latestJoints, 24);
                     latestScreenShoulderWidth = parsedPose.screenShoulderWidth;
+                    latestRootPixel = parsedPose.rootPixel;
+                    latestRootDepthMeters = parsedPose.rootDepthMeters;
+                    latestFrameSize = parsedPose.frameSize;
                     hasNewData = true;
                 }
             }
@@ -103,6 +109,9 @@ public class PoseReceiverUDP : MonoBehaviour
 
         Vector3[] jointsCopy = new Vector3[24];
         float screenShoulderWidth;
+        Vector2 rootPixel;
+        float rootDepthMeters;
+        Vector2 frameSize;
 
         lock (lockObj)
         {
@@ -111,6 +120,9 @@ public class PoseReceiverUDP : MonoBehaviour
 
             Array.Copy(latestJoints, jointsCopy, 24);
             screenShoulderWidth = latestScreenShoulderWidth;
+            rootPixel = latestRootPixel;
+            rootDepthMeters = latestRootDepthMeters;
+            frameSize = latestFrameSize;
             hasNewData = false;
         }
 
@@ -135,6 +147,9 @@ public class PoseReceiverUDP : MonoBehaviour
     {
         public Vector3[] joints;
         public float screenShoulderWidth;
+        public Vector2 rootPixel;
+        public float rootDepthMeters;
+        public Vector2 frameSize;
     }
 
     private ParsedPose ParseJsonManually(string json)
@@ -167,10 +182,30 @@ public class PoseReceiverUDP : MonoBehaviour
             if (tokens.Length >= 75)
                 screenShoulderWidth = float.Parse(tokens[72], CultureInfo.InvariantCulture);
 
+            Vector2 rootPixel = new Vector2(-1f, -1f);
+            float rootDepthMeters = -1f;
+            Vector2 frameSize = Vector2.zero;
+
+            if (tokens.Length >= 78)
+            {
+                rootPixel = new Vector2(
+                    float.Parse(tokens[73], CultureInfo.InvariantCulture),
+                    float.Parse(tokens[74], CultureInfo.InvariantCulture)
+                );
+                rootDepthMeters = float.Parse(tokens[75], CultureInfo.InvariantCulture);
+                frameSize = new Vector2(
+                    float.Parse(tokens[76], CultureInfo.InvariantCulture),
+                    float.Parse(tokens[77], CultureInfo.InvariantCulture)
+                );
+            }
+
             return new ParsedPose
             {
                 joints = result,
-                screenShoulderWidth = screenShoulderWidth
+                screenShoulderWidth = screenShoulderWidth,
+                rootPixel = rootPixel,
+                rootDepthMeters = rootDepthMeters,
+                frameSize = frameSize
             };
         }
         catch
