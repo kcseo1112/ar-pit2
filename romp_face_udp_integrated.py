@@ -36,6 +36,7 @@ FACE_MODEL_PATH = PROJECT_ROOT / "models" / "face_landmarker.task"
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_FPS = 30
+REALSENSE_FRAME_TIMEOUT_MS = 5000
 
 # ==========================
 # 2. ROMP config
@@ -171,6 +172,13 @@ class RealSenseCapture:
         self.depth_scale = None
 
     def start(self):
+        context = rs.context()
+        if len(context.devices) == 0:
+            raise RuntimeError(
+                "No Intel RealSense device was detected. "
+                "Connect the D435i, use a USB 3.x port, and close RealSense Viewer or any other app using it."
+            )
+
         self.config.enable_stream(
             rs.stream.color,
             self.width,
@@ -186,14 +194,28 @@ class RealSenseCapture:
             self.fps,
         )
 
-        profile = self.pipeline.start(self.config)
+        try:
+            profile = self.pipeline.start(self.config)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Failed to start the D435i color/depth pipeline. "
+                "Close any app that may be using the camera and check Windows Camera privacy permissions."
+            ) from exc
+
         self.depth_scale = profile.get_device().first_depth_sensor().get_depth_scale()
         print(f"[D435i] RealSense started: {self.width}x{self.height} @ {self.fps} FPS")
         print("[D435i] depth_scale:", self.depth_scale)
         return self
 
     def read(self):
-        frames = self.pipeline.wait_for_frames()
+        try:
+            frames = self.pipeline.wait_for_frames(REALSENSE_FRAME_TIMEOUT_MS)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "D435i started but no frames arrived. "
+                "Reconnect the camera, use a USB 3.x port, and close RealSense Viewer/Unity/other camera apps."
+            ) from exc
+
         aligned_frames = self.align.process(frames)
 
         color_frame = aligned_frames.get_color_frame()
