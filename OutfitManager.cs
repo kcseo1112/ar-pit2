@@ -89,6 +89,43 @@ public class OutfitManager : MonoBehaviour
         ApplyPoseToSlot(GetSlot(outfits, currentIndex), joints, screenShoulderWidth);
     }
 
+    public void ApplyPose(
+        Vector3[] joints,
+        float screenShoulderWidth,
+        Vector2 rootPixel,
+        float rootDepthMeters,
+        Vector2 frameSize)
+    {
+        if (useSeparatedOutfits)
+        {
+            ApplyPoseToSlot(
+                GetSlot(upperOutfits, currentUpperIndex),
+                joints,
+                screenShoulderWidth,
+                rootPixel,
+                rootDepthMeters,
+                frameSize);
+
+            ApplyPoseToSlot(
+                GetSlot(lowerOutfits, currentLowerIndex),
+                joints,
+                screenShoulderWidth,
+                rootPixel,
+                rootDepthMeters,
+                frameSize);
+
+            return;
+        }
+
+        ApplyPoseToSlot(
+            GetSlot(outfits, currentIndex),
+            joints,
+            screenShoulderWidth,
+            rootPixel,
+            rootDepthMeters,
+            frameSize);
+    }
+
     public void SelectNext()
     {
         if (outfits == null || outfits.Length == 0)
@@ -206,6 +243,22 @@ public class OutfitManager : MonoBehaviour
         if (slot == null || slot.avatar == null)
             return;
 
+        slot.avatar.ApplyPose(joints);
+        slot.avatar.ApplyBodyFit(joints, screenShoulderWidth);
+    }
+
+    void ApplyPoseToSlot(
+        OutfitSlot slot,
+        Vector3[] joints,
+        float screenShoulderWidth,
+        Vector2 rootPixel,
+        float rootDepthMeters,
+        Vector2 frameSize)
+    {
+        if (slot == null || slot.avatar == null)
+            return;
+
+        slot.avatar.ApplyRootFollow(rootPixel, rootDepthMeters, frameSize);
         slot.avatar.ApplyPose(joints);
         slot.avatar.ApplyBodyFit(joints, screenShoulderWidth);
     }

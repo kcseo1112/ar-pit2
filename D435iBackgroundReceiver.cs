@@ -15,6 +15,10 @@ public class D435iBackgroundReceiver : MonoBehaviour
     public float distanceFromCamera = 10f;
     public bool mirrorX = false;
 
+    [Header("Aspect")]
+    public bool preserveTextureAspect = true;
+    public bool fillScreen = false;
+
     private TcpClient client;
     private NetworkStream stream;
     private Thread receiveThread;
@@ -75,11 +79,47 @@ public class D435iBackgroundReceiver : MonoBehaviour
         transform.position = cam.position + cam.forward * distanceFromCamera;
         transform.rotation = cam.rotation;
 
-        float height = 2f * distanceFromCamera *
-                       Mathf.Tan(targetCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
-        float width = height * targetCamera.aspect;
+        float screenHeight = 2f * distanceFromCamera *
+                             Mathf.Tan(targetCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
+        float screenWidth = screenHeight * targetCamera.aspect;
 
-        transform.localScale = new Vector3(width, height, 1f);
+        float finalWidth = screenWidth;
+        float finalHeight = screenHeight;
+
+        if (preserveTextureAspect && texture != null && texture.width > 2 && texture.height > 2)
+        {
+            float textureAspect = (float)texture.width / texture.height;
+            float screenAspect = targetCamera.aspect;
+
+            if (fillScreen)
+            {
+                if (textureAspect > screenAspect)
+                {
+                    finalHeight = screenHeight;
+                    finalWidth = screenHeight * textureAspect;
+                }
+                else
+                {
+                    finalWidth = screenWidth;
+                    finalHeight = screenWidth / textureAspect;
+                }
+            }
+            else
+            {
+                if (textureAspect > screenAspect)
+                {
+                    finalWidth = screenWidth;
+                    finalHeight = screenWidth / textureAspect;
+                }
+                else
+                {
+                    finalHeight = screenHeight;
+                    finalWidth = screenHeight * textureAspect;
+                }
+            }
+        }
+
+        transform.localScale = new Vector3(finalWidth, finalHeight, 1f);
     }
 
     private void ReceiveLoop()

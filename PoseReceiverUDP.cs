@@ -131,10 +131,11 @@ public class PoseReceiverUDP : MonoBehaviour
 
         if (outfitManager != null)
         {
-            outfitManager.ApplyPose(jointsCopy, screenShoulderWidth);
+            outfitManager.ApplyPose(jointsCopy, screenShoulderWidth, rootPixel, rootDepthMeters, frameSize);
         }
         else if (avatar != null)
         {
+            avatar.ApplyRootFollow(rootPixel, rootDepthMeters, frameSize);
             avatar.ApplyPose(jointsCopy);
             avatar.ApplyBodyFit(jointsCopy, screenShoulderWidth);
         }

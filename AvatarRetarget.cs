@@ -39,6 +39,16 @@ public class AvatarRetarget : MonoBehaviour
     public float maxBodyScale = 1.35f;
     public float bodyScaleSmooth = 10f;
 
+    [Header("Root Follow")]
+    public bool enableRootFollow = true;
+    public Camera renderCamera;
+    public bool mirrorRootX = false;
+    public float depthToUnityScale = 1f;
+    public Vector3 rootPositionOffset = Vector3.zero;
+    public float rootFollowSmooth = 10f;
+    public float minValidDepth = 0.3f;
+    public float maxValidDepth = 5.0f;
+
     [Header("ROMP Neck/Head Apply")]
     public bool applyRomptoNeck = false;
     public bool applyRomptoHead = false;
@@ -222,6 +232,43 @@ public class AvatarRetarget : MonoBehaviour
             return;
 
         targetBodyScale = Mathf.Clamp(shoulderWidth / referenceShoulderWidth, minBodyScale, maxBodyScale);
+    }
+
+    public void ApplyRootFollow(Vector2 rootPixel, float rootDepthMeters, Vector2 frameSize)
+    {
+        if (!enableRootFollow)
+            return;
+
+        if (avatarRoot == null)
+            avatarRoot = transform;
+
+        if (renderCamera == null)
+            renderCamera = Camera.main;
+
+        if (renderCamera == null)
+            return;
+
+        if (frameSize.x <= 0f || frameSize.y <= 0f)
+            return;
+
+        if (rootPixel.x < 0f || rootPixel.y < 0f)
+            return;
+
+        if (rootDepthMeters < minValidDepth || rootDepthMeters > maxValidDepth)
+            return;
+
+        float viewportX = rootPixel.x / frameSize.x;
+        float viewportY = 1f - (rootPixel.y / frameSize.y);
+
+        if (mirrorRootX)
+            viewportX = 1f - viewportX;
+
+        float unityDepth = rootDepthMeters * depthToUnityScale;
+        Vector3 targetWorld = renderCamera.ViewportToWorldPoint(new Vector3(viewportX, viewportY, unityDepth));
+        targetWorld += rootPositionOffset;
+
+        float t = 1f - Mathf.Exp(-rootFollowSmooth * Time.deltaTime);
+        avatarRoot.position = Vector3.Lerp(avatarRoot.position, targetWorld, t);
     }
 
     public void RecalibrateBodyFit(Vector3[] joints)
