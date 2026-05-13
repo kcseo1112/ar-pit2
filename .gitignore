@@ -12,3 +12,34 @@ Thumbs.db
 
 # Local runtime output
 *.log
+
+# Unity generated files
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+
+# Unity IDE generated files
+*.csproj
+*.sln
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.vscode/
+
+# Unity packages and builds
+*.apk
+*.aab
+*.unitypackage
+sysinfo.txt
+*.stackdump
