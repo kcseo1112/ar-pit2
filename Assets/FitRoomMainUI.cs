@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.Collections;
+using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.SceneManagement;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 public class FitRoomMainUI : MonoBehaviour
@@ -21,6 +23,9 @@ public class FitRoomMainUI : MonoBehaviour
     public Sprite[] hatThumbnails;
     public Sprite[] shoesThumbnails;
 
+    [Header("API")]
+    public string apiBaseUrl = "http://127.0.0.1:5000";
+
     private const string CategoryUpper = "upper";
     private const string CategoryLower = "lower";
     private const string CategoryHat = "hat";
@@ -39,14 +44,28 @@ public class FitRoomMainUI : MonoBehaviour
 
     private Transform carouselContent;
     private ScrollRect carouselScrollRect;
+    private Image currentUpperThumbnailImage;
+    private Image currentLowerThumbnailImage;
+    private Image currentHatThumbnailImage;
+    private Image currentShoesThumbnailImage;
     private Text currentUpperNameText;
     private Text currentLowerNameText;
     private Text currentHatNameText;
     private Text currentShoesNameText;
+    private Image categoryInfoThumbnailImage;
     private Text categoryInfoTitleText;
     private Text categoryInfoBodyText;
     private Text categoryInfoIconText;
     private Text wishlistBodyText;
+    private Text userStatusText;
+    private InputField loginPhoneInput;
+    private InputField loginPasswordInput;
+    private InputField registerNameInput;
+    private InputField registerPhoneInput;
+    private InputField registerPasswordInput;
+    private InputField registerPasswordConfirmInput;
+    private int loggedInUserId;
+    private string loggedInUserName;
     private bool runtimeLayoutBuilt;
 
     private Color glassColor = new Color(0.043f, 0.067f, 0.11f, 0.88f);
@@ -155,6 +174,7 @@ public class FitRoomMainUI : MonoBehaviour
 
         RefreshSelectedCardState();
         RefreshCurrentOutfitPanel();
+        RefreshCategoryInfoPanel();
     }
 
     private void ToggleFavorite(string categoryCode, int index)
@@ -206,14 +226,22 @@ public class FitRoomMainUI : MonoBehaviour
         if (currentUpperNameText != null)
             currentUpperNameText.text = GetUpperName(outfitManager != null ? outfitManager.currentUpperIndex : 0);
 
+        SetThumbnailImage(currentUpperThumbnailImage, GetThumbnail(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0));
+
         if (currentLowerNameText != null)
             currentLowerNameText.text = GetLowerName(outfitManager != null ? outfitManager.currentLowerIndex : 0);
+
+        SetThumbnailImage(currentLowerThumbnailImage, GetThumbnail(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0));
 
         if (currentHatNameText != null)
             currentHatNameText.text = "선택 없음";
 
+        SetThumbnailImage(currentHatThumbnailImage, null);
+
         if (currentShoesNameText != null)
             currentShoesNameText.text = "선택 없음";
+
+        SetThumbnailImage(currentShoesThumbnailImage, null);
     }
 
     private void RefreshCategoryTabs()
@@ -242,32 +270,32 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void RefreshCategoryInfoPanel()
     {
-        if (categoryInfoTitleText == null || categoryInfoBodyText == null || categoryInfoIconText == null)
+        if (categoryInfoTitleText == null || categoryInfoBodyText == null)
             return;
 
         if (activeCategory == CategoryUpper)
         {
             categoryInfoTitleText.text = "상의 안내";
             categoryInfoBodyText.text = "원하는 상의를 선택하면 AR로 착용해 볼 수 있습니다.";
-            categoryInfoIconText.text = "T";
+            SetCategoryInfoThumbnail(GetThumbnail(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0), "T");
         }
         else if (activeCategory == CategoryLower)
         {
             categoryInfoTitleText.text = "하의 안내";
             categoryInfoBodyText.text = "원하는 하의를 선택하면 AR로 착용해 볼 수 있습니다.";
-            categoryInfoIconText.text = "P";
+            SetCategoryInfoThumbnail(GetThumbnail(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0), "P");
         }
         else if (activeCategory == CategoryHat)
         {
             categoryInfoTitleText.text = "모자 준비 중";
             categoryInfoBodyText.text = "모자 카테고리는 추후 OutfitManager 연동 예정입니다.";
-            categoryInfoIconText.text = "H";
+            SetCategoryInfoThumbnail(null, "H");
         }
         else
         {
             categoryInfoTitleText.text = "신발 준비 중";
             categoryInfoBodyText.text = "신발 카테고리는 추후 OutfitManager 연동 예정입니다.";
-            categoryInfoIconText.text = "S";
+            SetCategoryInfoThumbnail(null, "S");
         }
     }
 
@@ -287,6 +315,146 @@ public class FitRoomMainUI : MonoBehaviour
             lines.Add(GetFavoriteDisplayName(key));
 
         wishlistBodyText.text = string.Join("\n", lines.ToArray());
+    }
+
+    private void SetCategoryInfoThumbnail(Sprite sprite, string fallbackText)
+    {
+        SetThumbnailImage(categoryInfoThumbnailImage, sprite);
+
+        if (categoryInfoIconText == null)
+            return;
+
+        categoryInfoIconText.text = sprite == null ? fallbackText : string.Empty;
+        categoryInfoIconText.raycastTarget = false;
+    }
+
+    private void SetThumbnailImage(Image image, Sprite sprite)
+    {
+        if (image == null)
+            return;
+
+        image.sprite = sprite != null ? sprite : GetCircleSprite();
+        image.color = sprite != null ? Color.white : new Color(0.18f, 0.21f, 0.26f, 0.95f);
+        image.preserveAspect = true;
+    }
+
+    private IEnumerator LoginRoutine()
+    {
+        string phone = loginPhoneInput != null ? loginPhoneInput.text.Trim() : string.Empty;
+        string password = loginPasswordInput != null ? loginPasswordInput.text : string.Empty;
+
+        if (string.IsNullOrEmpty(phone) || string.IsNullOrEmpty(password))
+        {
+            Debug.LogWarning("[FitRoomUI] 전화번호와 비밀번호를 입력하세요.");
+            yield break;
+        }
+
+        string json = "{\"phone\":\"" + EscapeJson(phone) + "\",\"password\":\"" + EscapeJson(password) + "\"}";
+        yield return PostJson("/api/auth/login", json, response =>
+        {
+            AuthResponse parsed = JsonUtility.FromJson<AuthResponse>(response);
+            if (parsed != null && parsed.ok && parsed.data != null)
+            {
+                loggedInUserId = parsed.data.user_id;
+                loggedInUserName = parsed.data.name;
+                RefreshUserStatus();
+                ShowMainPanel();
+                Debug.Log("[FitRoomUI] login success: " + loggedInUserName);
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] login failed: " + response);
+            }
+        });
+    }
+
+    private IEnumerator RegisterRoutine()
+    {
+        string name = registerNameInput != null ? registerNameInput.text.Trim() : string.Empty;
+        string phone = registerPhoneInput != null ? registerPhoneInput.text.Trim() : string.Empty;
+        string password = registerPasswordInput != null ? registerPasswordInput.text : string.Empty;
+        string confirm = registerPasswordConfirmInput != null ? registerPasswordConfirmInput.text : string.Empty;
+
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(phone) || string.IsNullOrEmpty(password))
+        {
+            Debug.LogWarning("[FitRoomUI] 이름, 전화번호, 비밀번호를 입력하세요.");
+            yield break;
+        }
+
+        if (password != confirm)
+        {
+            Debug.LogWarning("[FitRoomUI] 비밀번호 확인이 일치하지 않습니다.");
+            yield break;
+        }
+
+        string json =
+            "{\"name\":\"" + EscapeJson(name) +
+            "\",\"phone\":\"" + EscapeJson(phone) +
+            "\",\"password\":\"" + EscapeJson(password) + "\"}";
+
+        yield return PostJson("/api/auth/register", json, response =>
+        {
+            AuthResponse parsed = JsonUtility.FromJson<AuthResponse>(response);
+            if (parsed != null && parsed.ok && parsed.data != null)
+            {
+                loggedInUserId = parsed.data.user_id;
+                loggedInUserName = parsed.data.name;
+                RefreshUserStatus();
+                ShowMainPanel();
+                Debug.Log("[FitRoomUI] register success: " + loggedInUserName);
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] register failed: " + response);
+            }
+        });
+    }
+
+    private IEnumerator PostJson(string path, string json, System.Action<string> onSuccess)
+    {
+        string url = apiBaseUrl.TrimEnd('/') + path;
+        byte[] body = Encoding.UTF8.GetBytes(json);
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            request.uploadHandler = new UploadHandlerRaw(body);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning("[FitRoomUI] API request failed: " + url + " / " + request.error);
+                yield break;
+            }
+
+            if (onSuccess != null)
+                onSuccess(request.downloadHandler.text);
+        }
+    }
+
+    private void RefreshUserStatus()
+    {
+        if (userStatusText == null)
+            return;
+
+        if (loggedInUserId > 0)
+            userStatusText.text = loggedInUserName + "님\n로그인됨";
+        else
+            userStatusText.text = "사용자님\n로그인 필요";
+    }
+
+    private string EscapeJson(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        return value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r");
     }
 
     private void EnsureRuntimeLayout()
@@ -368,6 +536,7 @@ public class FitRoomMainUI : MonoBehaviour
         SetRect(subtitle.rectTransform, new Vector2(110f, -70f), new Vector2(320f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
 
         Button userButton = CreateIconTextButton("UserStatusButton", header.transform, "사용자님\n로그인됨", "U", new Vector2(-340f, -25f), new Vector2(190f, 58f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        userStatusText = userButton.GetComponentInChildren<Text>();
         userButton.onClick.AddListener(ShowLoginPanel);
 
         Button wishlistButton = CreateIconTextButton("WishlistButton", header.transform, "찜 목록", "♡", new Vector2(-126f, -25f), new Vector2(170f, 58f), new Vector2(1f, 1f), new Vector2(1f, 1f));
@@ -386,20 +555,22 @@ public class FitRoomMainUI : MonoBehaviour
         Text title = CreateText("Title", panel.transform, "현재 착용 정보", 24, FontStyle.Bold, TextAnchor.MiddleLeft);
         SetRect(title.rectTransform, new Vector2(24f, -24f), new Vector2(280f, 34f), new Vector2(0f, 1f), new Vector2(0f, 1f));
 
-        currentUpperNameText = CreateCurrentOutfitItem(panel.transform, "CurrentUpperItem", "상의", GetUpperName(outfitManager != null ? outfitManager.currentUpperIndex : 0), 82f);
-        currentLowerNameText = CreateCurrentOutfitItem(panel.transform, "CurrentLowerItem", "하의", GetLowerName(outfitManager != null ? outfitManager.currentLowerIndex : 0), 184f);
-        currentHatNameText = CreateCurrentOutfitItem(panel.transform, "CurrentHatItem", "모자", "선택 없음", 286f);
-        currentShoesNameText = CreateCurrentOutfitItem(panel.transform, "CurrentShoesItem", "신발", "선택 없음", 388f);
+        currentUpperNameText = CreateCurrentOutfitItem(panel.transform, "CurrentUpperItem", "상의", GetUpperName(outfitManager != null ? outfitManager.currentUpperIndex : 0), 82f, out currentUpperThumbnailImage);
+        currentLowerNameText = CreateCurrentOutfitItem(panel.transform, "CurrentLowerItem", "하의", GetLowerName(outfitManager != null ? outfitManager.currentLowerIndex : 0), 184f, out currentLowerThumbnailImage);
+        currentHatNameText = CreateCurrentOutfitItem(panel.transform, "CurrentHatItem", "모자", "선택 없음", 286f, out currentHatThumbnailImage);
+        currentShoesNameText = CreateCurrentOutfitItem(panel.transform, "CurrentShoesItem", "신발", "선택 없음", 388f, out currentShoesThumbnailImage);
 
         Button saveButton = CreateNeonButton("SaveCurrentOutfitButton", panel.transform, "♡ 현재 코디 저장하기", new Vector2(24f, -506f), new Vector2(312f, 46f), new Vector2(0f, 1f), new Vector2(0f, 1f));
         saveButton.onClick.AddListener(() => Debug.Log("[FitRoomUI] current outfit saved locally."));
     }
 
-    private Text CreateCurrentOutfitItem(Transform parent, string objectName, string category, string outfitName, float top)
+    private Text CreateCurrentOutfitItem(Transform parent, string objectName, string category, string outfitName, float top, out Image thumbnailImage)
     {
         GameObject item = CreateAnchoredPanel(objectName, parent, new Vector2(24f, -top), new Vector2(312f, 82f), new Vector2(0f, 1f), new Color(0.082f, 0.106f, 0.145f, 0.88f));
         GameObject thumb = CreateRoundImage("Thumbnail", item.transform, new Color(0.18f, 0.21f, 0.26f, 0.95f), new Color(1f, 1f, 1f, 0.14f), 50f);
         SetRect(thumb.GetComponent<RectTransform>(), new Vector2(16f, -16f), new Vector2(50f, 50f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        thumbnailImage = thumb.GetComponent<Image>();
+        thumbnailImage.preserveAspect = true;
 
         Text categoryText = CreateText("Category", item.transform, category, 15, FontStyle.Normal, TextAnchor.MiddleLeft);
         categoryText.color = mutedText;
@@ -491,8 +662,10 @@ public class FitRoomMainUI : MonoBehaviour
         categoryInfoBodyText.color = mutedText;
         SetRect(categoryInfoBodyText.rectTransform, new Vector2(24f, -76f), new Vector2(300f, 112f), new Vector2(0f, 1f), new Vector2(0f, 1f));
 
-        GameObject iconBack = CreateRoundImage("NeonIcon", panel.transform, new Color(0.02f, 0.14f, 0.32f, 0.82f), blue, 116f);
+        GameObject iconBack = CreateRoundImage("SelectedOutfitImage", panel.transform, new Color(0.02f, 0.14f, 0.32f, 0.82f), blue, 116f);
         SetRect(iconBack.GetComponent<RectTransform>(), new Vector2(-150f, -62f), new Vector2(116f, 116f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        categoryInfoThumbnailImage = iconBack.GetComponent<Image>();
+        categoryInfoThumbnailImage.preserveAspect = true;
         categoryInfoIconText = CreateText("IconText", iconBack.transform, "T", 48, FontStyle.Bold, TextAnchor.MiddleCenter);
         categoryInfoIconText.color = cyan;
         Stretch(categoryInfoIconText.rectTransform, 0f, 0f, 0f, 0f);
@@ -628,10 +801,10 @@ public class FitRoomMainUI : MonoBehaviour
         GameObject overlay = CreateModalPanel("LoginPanel", parent, "로그인");
         Transform dialog = overlay.transform.Find("Dialog");
         Transform target = dialog != null ? dialog : overlay.transform;
-        CreateInputPlaceholder(overlay.transform, "PhoneInput", "전화번호", 116f);
-        CreateInputPlaceholder(overlay.transform, "PasswordInput", "비밀번호", 180f);
+        loginPhoneInput = CreateInputField(overlay.transform, "PhoneInput", "전화번호", 116f, false);
+        loginPasswordInput = CreateInputField(overlay.transform, "PasswordInput", "비밀번호", 180f, true);
         Button login = CreateNeonButton("LoginButton", target, "로그인", new Vector2(56f, -258f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
-        login.onClick.AddListener(() => Debug.Log("[FitRoomUI] login coming soon."));
+        login.onClick.AddListener(() => StartCoroutine(LoginRoutine()));
         Button register = CreateNeonButton("GoRegisterButton", target, "회원가입", new Vector2(300f, -258f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
         register.onClick.AddListener(ShowRegisterPanel);
         overlay.SetActive(false);
@@ -643,12 +816,12 @@ public class FitRoomMainUI : MonoBehaviour
         GameObject overlay = CreateModalPanel("RegisterPanel", parent, "회원가입");
         Transform dialog = overlay.transform.Find("Dialog");
         Transform target = dialog != null ? dialog : overlay.transform;
-        CreateInputPlaceholder(overlay.transform, "NameInput", "이름", 104f);
-        CreateInputPlaceholder(overlay.transform, "PhoneInput", "전화번호", 158f);
-        CreateInputPlaceholder(overlay.transform, "PasswordInput", "비밀번호", 212f);
-        CreateInputPlaceholder(overlay.transform, "PasswordConfirmInput", "비밀번호 확인", 266f);
+        registerNameInput = CreateInputField(overlay.transform, "NameInput", "이름", 104f, false);
+        registerPhoneInput = CreateInputField(overlay.transform, "PhoneInput", "전화번호", 158f, false);
+        registerPasswordInput = CreateInputField(overlay.transform, "PasswordInput", "비밀번호", 212f, true);
+        registerPasswordConfirmInput = CreateInputField(overlay.transform, "PasswordConfirmInput", "비밀번호 확인", 266f, true);
         Button register = CreateNeonButton("RegisterButton", target, "회원가입", new Vector2(56f, -330f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
-        register.onClick.AddListener(() => Debug.Log("[FitRoomUI] register coming soon."));
+        register.onClick.AddListener(() => StartCoroutine(RegisterRoutine()));
         Button login = CreateNeonButton("GoLoginButton", target, "로그인", new Vector2(300f, -330f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
         login.onClick.AddListener(ShowLoginPanel);
         overlay.SetActive(false);
@@ -679,6 +852,31 @@ public class FitRoomMainUI : MonoBehaviour
         Text text = CreateText("Placeholder", input.transform, placeholder, 17, FontStyle.Normal, TextAnchor.MiddleLeft);
         text.color = mutedText;
         Stretch(text.rectTransform, 18f, 0f, -18f, 0f);
+    }
+
+    private InputField CreateInputField(Transform parent, string objectName, string placeholder, float top, bool isPassword)
+    {
+        Transform dialog = parent.Find("Dialog");
+        Transform target = dialog != null ? dialog : parent;
+        GameObject input = CreateAnchoredPanel(objectName, target, new Vector2(56f, -top), new Vector2(464f, 44f), new Vector2(0f, 1f), new Color(0.082f, 0.106f, 0.145f, 0.95f));
+
+        InputField field = input.AddComponent<InputField>();
+        field.transition = Selectable.Transition.ColorTint;
+        field.targetGraphic = input.GetComponent<Image>();
+        field.contentType = isPassword ? InputField.ContentType.Password : InputField.ContentType.Standard;
+        field.lineType = InputField.LineType.SingleLine;
+
+        Text text = CreateText("Text", input.transform, string.Empty, 17, FontStyle.Normal, TextAnchor.MiddleLeft);
+        text.color = Color.white;
+        Stretch(text.rectTransform, 18f, 0f, -18f, 0f);
+
+        Text placeholderText = CreateText("Placeholder", input.transform, placeholder, 17, FontStyle.Normal, TextAnchor.MiddleLeft);
+        placeholderText.color = mutedText;
+        Stretch(placeholderText.rectTransform, 18f, 0f, -18f, 0f);
+
+        field.textComponent = text;
+        field.placeholder = placeholderText;
+        return field;
     }
 
     private Button CreateIconTextButton(string objectName, Transform parent, string label, string icon, Vector2 position, Vector2 size, Vector2 anchorMin, Vector2 pivot)
@@ -1092,32 +1290,18 @@ public class OutlineHolder : MonoBehaviour
     public Image outlineImage;
 }
 
-public static class FitRoomMainUIBootstrap
+[System.Serializable]
+public class AuthResponse
 {
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void CreateMainUI()
-    {
-        SceneManager.sceneLoaded += OnSceneLoaded;
-        BuildForCurrentScene();
-    }
+    public bool ok;
+    public AuthUser data;
+    public string message;
+}
 
-    private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
-    {
-        BuildForCurrentScene();
-    }
-
-    private static void BuildForCurrentScene()
-    {
-        if (Object.FindObjectOfType<FitRoomMainUI>() != null)
-            return;
-
-        OutfitManager outfitManager = Object.FindObjectOfType<OutfitManager>();
-        if (outfitManager == null)
-            return;
-
-        GameObject controller = new GameObject("FitRoomMainUI");
-        FitRoomMainUI ui = controller.AddComponent<FitRoomMainUI>();
-        ui.outfitManager = outfitManager;
-        Debug.Log("FitRoomMainUI bootstrap created");
-    }
+[System.Serializable]
+public class AuthUser
+{
+    public int user_id;
+    public string name;
+    public string phone;
 }

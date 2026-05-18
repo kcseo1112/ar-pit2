@@ -530,34 +530,31 @@ MonoBehaviour:
   - name: NONE
     displayRoot: {fileID: 0}
     avatar: {fileID: 0}
-  - name: skin
-    displayRoot: {fileID: 0}
-    avatar: {fileID: 0}
   - name: nomal
     displayRoot: {fileID: 6298807232236130658}
     avatar: {fileID: 6638881319330302937}
-  - name: IROMMAN
-    displayRoot: {fileID: 4962824549708921321}
-    avatar: {fileID: 5734399603475522388}
   - name: BLUE
     displayRoot: {fileID: 5302641402415798383}
     avatar: {fileID: 5302641402415798384}
   - name: padding
     displayRoot: {fileID: 1879307104026174780}
     avatar: {fileID: 1879307104026174781}
+  - name: IROMMAN
+    displayRoot: {fileID: 4962824549708921321}
+    avatar: {fileID: 5734399603475522388}
   - name: CH36
     displayRoot: {fileID: 3015174681152167075}
     avatar: {fileID: 3015174681152167076}
   lowerOutfits:
+  - name: NONE
+    displayRoot: {fileID: 0}
+    avatar: {fileID: 0}
   - name: pants1
     displayRoot: {fileID: 2807413781129788335}
     avatar: {fileID: 3296141629629833494}
   - name: trible
     displayRoot: {fileID: 176309994550098093}
     avatar: {fileID: 664757777024033304}
-  - name: NONE
-    displayRoot: {fileID: 0}
-    avatar: {fileID: 0}
   - name: CH36
     displayRoot: {fileID: 3015174681152167075}
     avatar: {fileID: 3015174681152167076}
@@ -583,6 +580,70 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0.11168444, y: 1.402578, z: -0.41102865}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1923259772
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1923259774}
+  - component: {fileID: 1923259773}
+  m_Layer: 0
+  m_Name: FitRoomMainUI
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1923259773
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1923259772}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b24cdbc4695438aaa3601bc412c7e8a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  outfitManager: {fileID: 1314695923}
+  mainPanel: {fileID: 0}
+  loginPanel: {fileID: 0}
+  registerPanel: {fileID: 0}
+  wishlistPanel: {fileID: 0}
+  upperThumbnails:
+  - {fileID: 21300000, guid: 9dd9acb7327028a449b3a2f5d65ee40c, type: 3}
+  - {fileID: 21300000, guid: 2bc33faa561629e4dad1ffb22691bae1, type: 3}
+  - {fileID: 21300000, guid: c02f03942020be5498b71fb20aea55f5, type: 3}
+  - {fileID: 21300000, guid: 5573af21e78d7454980128fb0ede2a69, type: 3}
+  - {fileID: 21300000, guid: 4cfe56d555a8298468725f35ebc559e5, type: 3}
+  - {fileID: 21300000, guid: a10e6e81d7c94ab49b025b863ab91898, type: 3}
+  lowerThumbnails:
+  - {fileID: 21300000, guid: 9dd9acb7327028a449b3a2f5d65ee40c, type: 3}
+  - {fileID: 21300000, guid: 544bbcd3abc3b9848848c25ee3ab14c0, type: 3}
+  - {fileID: 21300000, guid: 174c2715bc23da44a9f6701c54b1982c, type: 3}
+  - {fileID: 21300000, guid: a10e6e81d7c94ab49b025b863ab91898, type: 3}
+  hatThumbnails: []
+  shoesThumbnails: []
+  apiBaseUrl: http://127.0.0.1:5000
+--- !u!4 &1923259774
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1923259772}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0.44670376, y: 0.88603806, z: -3.563599}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -17041,3 +17102,4 @@ SceneRoots:
   - {fileID: 1251846173114335110}
   - {fileID: 2491578874885031449}
   - {fileID: 910166000}
+  - {fileID: 1923259774}
