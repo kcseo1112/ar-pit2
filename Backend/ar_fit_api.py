@@ -220,6 +220,67 @@ def login():
     return ok({"user_id": user["user_id"], "name": user["name"], "phone": user["phone"]})
 
 
+@app.get("/api/users/<int:user_id>")
+def user_detail(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT user_id, name, phone
+                FROM users
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            user = cursor.fetchone()
+
+    if user is None:
+        return fail("user not found", 404)
+
+    return ok(user)
+
+
+@app.post("/api/users/<int:user_id>/password")
+def change_password(user_id):
+    body = require_json()
+    current_password = body.get("current_password") or ""
+    new_password = body.get("new_password") or ""
+
+    if not current_password or not new_password:
+        return fail("current_password and new_password are required")
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT user_id, password_hash
+                FROM users
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            user = cursor.fetchone()
+
+            if user is None:
+                return fail("user not found", 404)
+
+            if not check_password_hash(user["password_hash"], current_password):
+                return fail("current password is invalid", 401)
+
+            cursor.execute(
+                """
+                UPDATE users
+                SET password_hash = %s
+                WHERE user_id = %s
+                """,
+                (generate_password_hash(new_password), user_id),
+            )
+
+        conn.commit()
+
+    return ok({"user_id": user_id, "password_changed": True})
+
+
 @app.get("/api/users/<int:user_id>/favorites")
 def user_favorites(user_id):
     with get_connection() as conn:
@@ -286,6 +347,26 @@ def toggle_favorite():
         conn.commit()
 
     return ok({"user_id": user_id, "outfit_id": outfit_id, "is_favorite": is_favorite})
+
+
+@app.post("/api/favorites/remove")
+def remove_favorite():
+    body = require_json()
+    user_id = body.get("user_id")
+    outfit_id = body.get("outfit_id")
+
+    if not user_id or not outfit_id:
+        return fail("user_id and outfit_id are required")
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM favorites WHERE user_id = %s AND outfit_id = %s",
+                (user_id, outfit_id),
+            )
+        conn.commit()
+
+    return ok({"user_id": user_id, "outfit_id": outfit_id, "is_favorite": False})
 
 
 @app.post("/api/dev/seed")

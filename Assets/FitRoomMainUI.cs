@@ -16,6 +16,7 @@ public class FitRoomMainUI : MonoBehaviour
     public GameObject loginPanel;
     public GameObject registerPanel;
     public GameObject wishlistPanel;
+    public GameObject userInfoPanel;
 
     [Header("Thumbnails")]
     public Sprite[] upperThumbnails;
@@ -33,11 +34,17 @@ public class FitRoomMainUI : MonoBehaviour
 
     private readonly List<OutfitCardButton> outfitCards = new List<OutfitCardButton>();
     private readonly HashSet<string> favoriteKeys = new HashSet<string>();
+    private readonly HashSet<int> favoriteOutfitIds = new HashSet<int>();
+    private readonly List<DbOutfit> wishlistOutfits = new List<DbOutfit>();
+    private readonly Dictionary<string, DbOutfit> dbOutfitsByUnityKey = new Dictionary<string, DbOutfit>();
     private readonly Dictionary<string, Button> categoryButtons = new Dictionary<string, Button>();
     private readonly Dictionary<string, Text> categoryButtonTexts = new Dictionary<string, Text>();
     private readonly Dictionary<string, Image> categoryButtonBorders = new Dictionary<string, Image>();
+    private readonly Dictionary<string, Text> wishlistTabTexts = new Dictionary<string, Text>();
+    private readonly Dictionary<string, Image> wishlistTabBorders = new Dictionary<string, Image>();
 
     private string activeCategory = CategoryUpper;
+    private string activeWishlistCategory = "all";
     private Font runtimeFont;
     private Sprite roundedSprite;
     private Sprite circleSprite;
@@ -57,6 +64,7 @@ public class FitRoomMainUI : MonoBehaviour
     private Text categoryInfoBodyText;
     private Text categoryInfoIconText;
     private Text wishlistBodyText;
+    private Transform wishlistContent;
     private Text userStatusText;
     private InputField loginPhoneInput;
     private InputField loginPasswordInput;
@@ -64,8 +72,14 @@ public class FitRoomMainUI : MonoBehaviour
     private InputField registerPhoneInput;
     private InputField registerPasswordInput;
     private InputField registerPasswordConfirmInput;
+    private Text userInfoNameText;
+    private Text userInfoPhoneText;
+    private InputField currentPasswordInput;
+    private InputField newPasswordInput;
+    private InputField newPasswordConfirmInput;
     private int loggedInUserId;
     private string loggedInUserName;
+    private string loggedInUserPhone;
     private bool runtimeLayoutBuilt;
 
     private Color glassColor = new Color(0.043f, 0.067f, 0.11f, 0.88f);
@@ -112,6 +126,7 @@ public class FitRoomMainUI : MonoBehaviour
         RebuildCarousel();
         RefreshCategoryTabs();
         RefreshCategoryInfoPanel();
+        StartCoroutine(LoadCategoryOutfitsRoutine(categoryCode));
     }
 
     public void SelectUpper(int index)
@@ -130,6 +145,7 @@ public class FitRoomMainUI : MonoBehaviour
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, false);
         SetPanel(wishlistPanel, false);
+        SetPanel(userInfoPanel, false);
     }
 
     public void ShowLoginPanel()
@@ -138,6 +154,23 @@ public class FitRoomMainUI : MonoBehaviour
         SetPanel(loginPanel, true);
         SetPanel(registerPanel, false);
         SetPanel(wishlistPanel, false);
+        SetPanel(userInfoPanel, false);
+    }
+
+    public void ShowUserInfoPanel()
+    {
+        if (loggedInUserId <= 0)
+        {
+            ShowLoginPanel();
+            return;
+        }
+
+        SetPanel(mainPanel, true);
+        SetPanel(loginPanel, false);
+        SetPanel(registerPanel, false);
+        SetPanel(wishlistPanel, false);
+        SetPanel(userInfoPanel, true);
+        StartCoroutine(LoadUserInfoRoutine());
     }
 
     public void ShowRegisterPanel()
@@ -146,6 +179,7 @@ public class FitRoomMainUI : MonoBehaviour
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, true);
         SetPanel(wishlistPanel, false);
+        SetPanel(userInfoPanel, false);
     }
 
     public void ShowWishlistPanel()
@@ -154,7 +188,8 @@ public class FitRoomMainUI : MonoBehaviour
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, false);
         SetPanel(wishlistPanel, true);
-        RefreshWishlistPanel();
+        SetPanel(userInfoPanel, false);
+        StartCoroutine(LoadWishlistRoutine());
     }
 
     private void SelectOutfit(string categoryCode, int index)
@@ -179,16 +214,21 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void ToggleFavorite(string categoryCode, int index)
     {
-        string key = GetFavoriteKey(categoryCode, index);
+        if (loggedInUserId <= 0)
+        {
+            ShowLoginPanel();
+            Debug.LogWarning("[FitRoomUI] 로그인 후 찜 기능을 사용할 수 있습니다.");
+            return;
+        }
 
-        if (favoriteKeys.Contains(key))
-            favoriteKeys.Remove(key);
-        else
-            favoriteKeys.Add(key);
+        DbOutfit outfit = GetDbOutfit(categoryCode, index);
+        if (outfit == null || outfit.outfit_id <= 0)
+        {
+            Debug.LogWarning("[FitRoomUI] DB 의상 정보가 없어 찜을 저장할 수 없습니다: " + GetFavoriteKey(categoryCode, index));
+            return;
+        }
 
-        RefreshSelectedCardState();
-        RefreshWishlistPanel();
-        Debug.Log("[FitRoomUI] favorite toggled: " + key);
+        StartCoroutine(ToggleFavoriteRoutine(outfit));
     }
 
     private void RebuildCarousel()
@@ -224,12 +264,12 @@ public class FitRoomMainUI : MonoBehaviour
     private void RefreshCurrentOutfitPanel()
     {
         if (currentUpperNameText != null)
-            currentUpperNameText.text = GetUpperName(outfitManager != null ? outfitManager.currentUpperIndex : 0);
+            currentUpperNameText.text = GetOutfitName(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0);
 
         SetThumbnailImage(currentUpperThumbnailImage, GetThumbnail(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0));
 
         if (currentLowerNameText != null)
-            currentLowerNameText.text = GetLowerName(outfitManager != null ? outfitManager.currentLowerIndex : 0);
+            currentLowerNameText.text = GetOutfitName(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0);
 
         SetThumbnailImage(currentLowerThumbnailImage, GetThumbnail(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0));
 
@@ -262,7 +302,7 @@ public class FitRoomMainUI : MonoBehaviour
         {
             OutfitCardButton card = outfitCards[i];
             bool selected = IsSelected(card.categoryCode, card.index);
-            bool favorite = favoriteKeys.Contains(GetFavoriteKey(card.categoryCode, card.index));
+            bool favorite = IsFavorite(card.categoryCode, card.index);
             card.SetSelected(selected, blue);
             card.SetFavorite(favorite, cyan);
         }
@@ -276,13 +316,13 @@ public class FitRoomMainUI : MonoBehaviour
         if (activeCategory == CategoryUpper)
         {
             categoryInfoTitleText.text = "상의 안내";
-            categoryInfoBodyText.text = "원하는 상의를 선택하면 AR로 착용해 볼 수 있습니다.";
+            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0, "원하는 상의를 선택하면 AR로 착용해 볼 수 있습니다.");
             SetCategoryInfoThumbnail(GetThumbnail(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0), "T");
         }
         else if (activeCategory == CategoryLower)
         {
             categoryInfoTitleText.text = "하의 안내";
-            categoryInfoBodyText.text = "원하는 하의를 선택하면 AR로 착용해 볼 수 있습니다.";
+            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0, "원하는 하의를 선택하면 AR로 착용해 볼 수 있습니다.");
             SetCategoryInfoThumbnail(GetThumbnail(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0), "P");
         }
         else if (activeCategory == CategoryHat)
@@ -301,20 +341,72 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void RefreshWishlistPanel()
     {
-        if (wishlistBodyText == null)
+        if (wishlistContent == null)
             return;
 
-        if (favoriteKeys.Count == 0)
-        {
-            wishlistBodyText.text = "찜한 옷이 없습니다.";
+        ClearChildren(wishlistContent);
+
+        if (wishlistBodyText != null)
+            wishlistBodyText.gameObject.SetActive(true);
+    }
+
+    private void SelectWishlistCategory(string categoryCode)
+    {
+        activeWishlistCategory = categoryCode;
+        RebuildWishlistList();
+        RefreshWishlistTabs();
+    }
+
+    private void RebuildWishlistList()
+    {
+        if (wishlistContent == null)
             return;
+
+        ClearChildren(wishlistContent);
+
+        int visibleCount = 0;
+        for (int i = 0; i < wishlistOutfits.Count; i++)
+        {
+            DbOutfit outfit = wishlistOutfits[i];
+            if (!ShouldShowWishlistOutfit(outfit))
+                continue;
+
+            CreateWishlistItem(wishlistContent, outfit);
+            visibleCount++;
         }
 
-        List<string> lines = new List<string>();
-        foreach (string key in favoriteKeys)
-            lines.Add(GetFavoriteDisplayName(key));
+        if (wishlistBodyText != null)
+        {
+            wishlistBodyText.gameObject.SetActive(visibleCount == 0);
+            wishlistBodyText.text = wishlistOutfits.Count == 0
+                ? "찜한 옷이 없습니다."
+                : "선택한 카테고리에 찜한 옷이 없습니다.";
+        }
 
-        wishlistBodyText.text = string.Join("\n", lines.ToArray());
+        RefreshWishlistTabs();
+    }
+
+    private bool ShouldShowWishlistOutfit(DbOutfit outfit)
+    {
+        if (activeWishlistCategory == "all")
+            return true;
+
+        if (outfit == null)
+            return false;
+
+        return outfit.unity_category_code == activeWishlistCategory || outfit.category_code == activeWishlistCategory;
+    }
+
+    private void RefreshWishlistTabs()
+    {
+        foreach (KeyValuePair<string, Image> pair in wishlistTabBorders)
+        {
+            bool selected = pair.Key == activeWishlistCategory;
+            pair.Value.color = selected ? blue : new Color(1f, 1f, 1f, 0.16f);
+        }
+
+        foreach (KeyValuePair<string, Text> pair in wishlistTabTexts)
+            pair.Value.color = pair.Key == activeWishlistCategory ? Color.white : mutedText;
     }
 
     private void SetCategoryInfoThumbnail(Sprite sprite, string fallbackText)
@@ -357,7 +449,9 @@ public class FitRoomMainUI : MonoBehaviour
             {
                 loggedInUserId = parsed.data.user_id;
                 loggedInUserName = parsed.data.name;
+                loggedInUserPhone = parsed.data.phone;
                 RefreshUserStatus();
+                StartCoroutine(LoadFavoriteIdsRoutine());
                 ShowMainPanel();
                 Debug.Log("[FitRoomUI] login success: " + loggedInUserName);
             }
@@ -399,7 +493,9 @@ public class FitRoomMainUI : MonoBehaviour
             {
                 loggedInUserId = parsed.data.user_id;
                 loggedInUserName = parsed.data.name;
+                loggedInUserPhone = parsed.data.phone;
                 RefreshUserStatus();
+                StartCoroutine(LoadFavoriteIdsRoutine());
                 ShowMainPanel();
                 Debug.Log("[FitRoomUI] register success: " + loggedInUserName);
             }
@@ -408,6 +504,228 @@ public class FitRoomMainUI : MonoBehaviour
                 Debug.LogWarning("[FitRoomUI] register failed: " + response);
             }
         });
+    }
+
+    private IEnumerator LoadCategoryOutfitsRoutine(string categoryCode)
+    {
+        yield return GetJson("/api/outfits?category_code=" + UnityWebRequest.EscapeURL(categoryCode), response =>
+        {
+            OutfitListResponse parsed = JsonUtility.FromJson<OutfitListResponse>(response);
+            if (parsed == null || !parsed.ok || parsed.data == null)
+            {
+                Debug.LogWarning("[FitRoomUI] outfit metadata load failed: " + response);
+                return;
+            }
+
+            for (int i = 0; i < parsed.data.Length; i++)
+            {
+                DbOutfit outfit = parsed.data[i];
+                dbOutfitsByUnityKey[GetFavoriteKey(outfit.unity_category_code, outfit.unity_outfit_index)] = outfit;
+            }
+
+            RebuildCarousel();
+            RefreshCurrentOutfitPanel();
+            RefreshCategoryInfoPanel();
+        });
+    }
+
+    private IEnumerator LoadFavoriteIdsRoutine()
+    {
+        if (loggedInUserId <= 0)
+            yield break;
+
+        yield return GetJson("/api/users/" + loggedInUserId + "/favorites", response =>
+        {
+            OutfitListResponse parsed = JsonUtility.FromJson<OutfitListResponse>(response);
+            favoriteOutfitIds.Clear();
+
+            if (parsed != null && parsed.ok && parsed.data != null)
+            {
+                for (int i = 0; i < parsed.data.Length; i++)
+                    favoriteOutfitIds.Add(parsed.data[i].outfit_id);
+            }
+
+            RefreshSelectedCardState();
+        });
+    }
+
+    private IEnumerator LoadWishlistRoutine()
+    {
+        if (wishlistContent == null)
+            yield break;
+
+        ClearChildren(wishlistContent);
+        wishlistOutfits.Clear();
+
+        if (loggedInUserId <= 0)
+        {
+            if (wishlistBodyText != null)
+            {
+                wishlistBodyText.gameObject.SetActive(true);
+                wishlistBodyText.text = "로그인 후 찜 목록을 확인할 수 있습니다.";
+            }
+            yield break;
+        }
+
+        if (wishlistBodyText != null)
+        {
+            wishlistBodyText.gameObject.SetActive(true);
+            wishlistBodyText.text = "찜 목록을 불러오는 중입니다.";
+        }
+
+        yield return GetJson("/api/users/" + loggedInUserId + "/favorites", response =>
+        {
+            OutfitListResponse parsed = JsonUtility.FromJson<OutfitListResponse>(response);
+            ClearChildren(wishlistContent);
+            favoriteOutfitIds.Clear();
+
+            if (parsed == null || !parsed.ok || parsed.data == null || parsed.data.Length == 0)
+            {
+                if (wishlistBodyText != null)
+                {
+                    wishlistBodyText.gameObject.SetActive(true);
+                    wishlistBodyText.text = "찜한 옷이 없습니다.";
+                }
+                return;
+            }
+
+            if (wishlistBodyText != null)
+                wishlistBodyText.gameObject.SetActive(false);
+
+            for (int i = 0; i < parsed.data.Length; i++)
+            {
+                DbOutfit outfit = parsed.data[i];
+                favoriteOutfitIds.Add(outfit.outfit_id);
+                dbOutfitsByUnityKey[GetFavoriteKey(outfit.unity_category_code, outfit.unity_outfit_index)] = outfit;
+                wishlistOutfits.Add(outfit);
+            }
+
+            RebuildWishlistList();
+            RefreshSelectedCardState();
+        });
+    }
+
+    private IEnumerator ToggleFavoriteRoutine(DbOutfit outfit)
+    {
+        string json = "{\"user_id\":" + loggedInUserId + ",\"outfit_id\":" + outfit.outfit_id + "}";
+
+        yield return PostJson("/api/favorites/toggle", json, response =>
+        {
+            FavoriteToggleResponse parsed = JsonUtility.FromJson<FavoriteToggleResponse>(response);
+            if (parsed != null && parsed.ok && parsed.data != null)
+            {
+                if (parsed.data.is_favorite)
+                    favoriteOutfitIds.Add(outfit.outfit_id);
+                else
+                    favoriteOutfitIds.Remove(outfit.outfit_id);
+
+                RefreshSelectedCardState();
+
+                if (wishlistPanel != null && wishlistPanel.activeSelf)
+                    StartCoroutine(LoadWishlistRoutine());
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] favorite toggle failed: " + response);
+            }
+        });
+    }
+
+    private IEnumerator RemoveFavoriteRoutine(DbOutfit outfit)
+    {
+        string json = "{\"user_id\":" + loggedInUserId + ",\"outfit_id\":" + outfit.outfit_id + "}";
+
+        yield return PostJson("/api/favorites/remove", json, response =>
+        {
+            FavoriteToggleResponse parsed = JsonUtility.FromJson<FavoriteToggleResponse>(response);
+            if (parsed != null && parsed.ok)
+            {
+                favoriteOutfitIds.Remove(outfit.outfit_id);
+                RefreshSelectedCardState();
+                StartCoroutine(LoadWishlistRoutine());
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] favorite remove failed: " + response);
+            }
+        });
+    }
+
+    private IEnumerator LoadUserInfoRoutine()
+    {
+        if (loggedInUserId <= 0)
+            yield break;
+
+        yield return GetJson("/api/users/" + loggedInUserId, response =>
+        {
+            AuthResponse parsed = JsonUtility.FromJson<AuthResponse>(response);
+            if (parsed != null && parsed.ok && parsed.data != null)
+            {
+                loggedInUserName = parsed.data.name;
+                loggedInUserPhone = parsed.data.phone;
+                RefreshUserStatus();
+                RefreshUserInfoPanel();
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] user info load failed: " + response);
+            }
+        });
+    }
+
+    private IEnumerator ChangePasswordRoutine()
+    {
+        if (loggedInUserId <= 0)
+        {
+            ShowLoginPanel();
+            yield break;
+        }
+
+        string currentPassword = currentPasswordInput != null ? currentPasswordInput.text : string.Empty;
+        string newPassword = newPasswordInput != null ? newPasswordInput.text : string.Empty;
+        string confirm = newPasswordConfirmInput != null ? newPasswordConfirmInput.text : string.Empty;
+
+        if (string.IsNullOrEmpty(currentPassword) || string.IsNullOrEmpty(newPassword))
+        {
+            Debug.LogWarning("[FitRoomUI] 현재 비밀번호와 새 비밀번호를 입력하세요.");
+            yield break;
+        }
+
+        if (newPassword != confirm)
+        {
+            Debug.LogWarning("[FitRoomUI] 새 비밀번호 확인이 일치하지 않습니다.");
+            yield break;
+        }
+
+        string json =
+            "{\"current_password\":\"" + EscapeJson(currentPassword) +
+            "\",\"new_password\":\"" + EscapeJson(newPassword) + "\"}";
+
+        yield return PostJson("/api/users/" + loggedInUserId + "/password", json, response =>
+        {
+            ApiBasicResponse parsed = JsonUtility.FromJson<ApiBasicResponse>(response);
+            if (parsed != null && parsed.ok)
+            {
+                ClearPasswordInputs();
+                ShowMainPanel();
+                Debug.Log("[FitRoomUI] password changed.");
+            }
+            else
+            {
+                Debug.LogWarning("[FitRoomUI] password change failed: " + response);
+            }
+        });
+    }
+
+    private void Logout()
+    {
+        loggedInUserId = 0;
+        loggedInUserName = string.Empty;
+        loggedInUserPhone = string.Empty;
+        ClearPasswordInputs();
+        RefreshUserStatus();
+        ShowMainPanel();
+        Debug.Log("[FitRoomUI] logged out.");
     }
 
     private IEnumerator PostJson(string path, string json, System.Action<string> onSuccess)
@@ -434,15 +752,55 @@ public class FitRoomMainUI : MonoBehaviour
         }
     }
 
+    private IEnumerator GetJson(string path, System.Action<string> onSuccess)
+    {
+        string url = apiBaseUrl.TrimEnd('/') + path;
+
+        using (UnityWebRequest request = UnityWebRequest.Get(url))
+        {
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning("[FitRoomUI] API request failed: " + url + " / " + request.error);
+                yield break;
+            }
+
+            if (onSuccess != null)
+                onSuccess(request.downloadHandler.text);
+        }
+    }
+
     private void RefreshUserStatus()
     {
         if (userStatusText == null)
             return;
 
         if (loggedInUserId > 0)
-            userStatusText.text = loggedInUserName + "님\n로그인됨";
+            userStatusText.text = loggedInUserName + "님";
         else
-            userStatusText.text = "사용자님\n로그인 필요";
+            userStatusText.text = "로그인";
+    }
+
+    private void RefreshUserInfoPanel()
+    {
+        if (userInfoNameText != null)
+            userInfoNameText.text = string.IsNullOrEmpty(loggedInUserName) ? "-" : loggedInUserName;
+
+        if (userInfoPhoneText != null)
+            userInfoPhoneText.text = string.IsNullOrEmpty(loggedInUserPhone) ? "-" : loggedInUserPhone;
+    }
+
+    private void ClearPasswordInputs()
+    {
+        if (currentPasswordInput != null)
+            currentPasswordInput.text = string.Empty;
+
+        if (newPasswordInput != null)
+            newPasswordInput.text = string.Empty;
+
+        if (newPasswordConfirmInput != null)
+            newPasswordConfirmInput.text = string.Empty;
     }
 
     private string EscapeJson(string value)
@@ -482,6 +840,7 @@ public class FitRoomMainUI : MonoBehaviour
         wishlistPanel = CreateWishlistPanel(mainPanel.transform);
         loginPanel = CreateLoginPanel(mainPanel.transform);
         registerPanel = CreateRegisterPanel(mainPanel.transform);
+        userInfoPanel = CreateUserInfoPanel(mainPanel.transform);
 
         EnsureEventSystem();
         RefreshCurrentOutfitPanel();
@@ -535,9 +894,15 @@ public class FitRoomMainUI : MonoBehaviour
         subtitle.color = mutedText;
         SetRect(subtitle.rectTransform, new Vector2(110f, -70f), new Vector2(320f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
 
-        Button userButton = CreateIconTextButton("UserStatusButton", header.transform, "사용자님\n로그인됨", "U", new Vector2(-340f, -25f), new Vector2(190f, 58f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        Button userButton = CreateIconTextButton("UserStatusButton", header.transform, "로그인", "U", new Vector2(-340f, -25f), new Vector2(190f, 58f), new Vector2(1f, 1f), new Vector2(1f, 1f));
         userStatusText = userButton.GetComponentInChildren<Text>();
-        userButton.onClick.AddListener(ShowLoginPanel);
+        userButton.onClick.AddListener(() =>
+        {
+            if (loggedInUserId > 0)
+                ShowUserInfoPanel();
+            else
+                ShowLoginPanel();
+        });
 
         Button wishlistButton = CreateIconTextButton("WishlistButton", header.transform, "찜 목록", "♡", new Vector2(-126f, -25f), new Vector2(170f, 58f), new Vector2(1f, 1f), new Vector2(1f, 1f));
         wishlistButton.onClick.AddListener(ShowWishlistPanel);
@@ -766,6 +1131,7 @@ public class FitRoomMainUI : MonoBehaviour
         cardButton.favoriteButton = heart;
         cardButton.borderImage = card.GetComponent<OutlineHolder>().outlineImage;
         cardButton.favoriteText = heart.GetComponentInChildren<Text>();
+        cardButton.nameText = name;
         cardButton.checkMark = check.gameObject;
         return cardButton;
     }
@@ -791,9 +1157,116 @@ public class FitRoomMainUI : MonoBehaviour
         Transform target = dialog != null ? dialog : overlay.transform;
         wishlistBodyText = CreateText("WishlistPlaceholder", target, "찜한 옷이 없습니다.", 20, FontStyle.Normal, TextAnchor.UpperLeft);
         wishlistBodyText.color = mutedText;
-        SetRect(wishlistBodyText.rectTransform, new Vector2(56f, -118f), new Vector2(520f, 300f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        SetRect(wishlistBodyText.rectTransform, new Vector2(56f, -150f), new Vector2(488f, 42f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        CreateWishlistCategoryTabPanel(target);
+
+        GameObject scroll = CreateRect("WishlistScrollView", target, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
+        Stretch(scroll.GetComponent<RectTransform>(), 46f, 34f, -46f, -142f);
+        ScrollRect scrollRect = scroll.AddComponent<ScrollRect>();
+        scrollRect.horizontal = false;
+        scrollRect.vertical = true;
+        scrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+        GameObject viewport = CreateRect("Viewport", scroll.transform, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
+        Stretch(viewport.GetComponent<RectTransform>(), 0f, 0f, 0f, 0f);
+        Image viewportImage = viewport.AddComponent<Image>();
+        viewportImage.color = new Color(1f, 1f, 1f, 0.01f);
+        viewport.AddComponent<Mask>().showMaskGraphic = false;
+
+        GameObject content = CreateRect("Content", viewport.transform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f));
+        content.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 0f);
+        VerticalLayoutGroup layout = content.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(10, 10, 8, 8);
+        layout.spacing = 12f;
+        layout.childAlignment = TextAnchor.UpperCenter;
+        layout.childControlWidth = true;
+        layout.childControlHeight = false;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        ContentSizeFitter fitter = content.AddComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        wishlistContent = content.transform;
+        scrollRect.viewport = viewport.GetComponent<RectTransform>();
+        scrollRect.content = content.GetComponent<RectTransform>();
+        RefreshWishlistTabs();
         overlay.SetActive(false);
         return overlay;
+    }
+
+    private void CreateWishlistCategoryTabPanel(Transform parent)
+    {
+        GameObject tabs = CreateRect("WishlistCategoryTabPanel", parent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        tabs.GetComponent<RectTransform>().anchoredPosition = new Vector2(56f, -86f);
+        tabs.GetComponent<RectTransform>().sizeDelta = new Vector2(488f, 42f);
+
+        HorizontalLayoutGroup layout = tabs.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 8f;
+        layout.childControlHeight = true;
+        layout.childControlWidth = true;
+        layout.childForceExpandHeight = true;
+        layout.childForceExpandWidth = true;
+
+        CreateWishlistTabButton(tabs.transform, "WishlistAllTabButton", "all", "전체");
+        CreateWishlistTabButton(tabs.transform, "WishlistUpperTabButton", CategoryUpper, "상의");
+        CreateWishlistTabButton(tabs.transform, "WishlistLowerTabButton", CategoryLower, "하의");
+        CreateWishlistTabButton(tabs.transform, "WishlistHatTabButton", CategoryHat, "모자");
+        CreateWishlistTabButton(tabs.transform, "WishlistShoesTabButton", CategoryShoes, "신발");
+    }
+
+    private void CreateWishlistTabButton(Transform parent, string objectName, string categoryCode, string label)
+    {
+        GameObject obj = CreatePanelObject(objectName, parent, new Color(0.057f, 0.078f, 0.114f, 0.92f), new Color(1f, 1f, 1f, 0.16f));
+        Button button = obj.AddComponent<Button>();
+        button.transition = Selectable.Transition.ColorTint;
+        button.targetGraphic = obj.GetComponent<Image>();
+        button.onClick.AddListener(() => SelectWishlistCategory(categoryCode));
+
+        Text text = CreateText("Label", obj.transform, label, 15, FontStyle.Bold, TextAnchor.MiddleCenter);
+        Stretch(text.rectTransform, 4f, 2f, -4f, -2f);
+
+        wishlistTabTexts[categoryCode] = text;
+        wishlistTabBorders[categoryCode] = obj.GetComponent<OutlineHolder>().outlineImage;
+    }
+
+    private void CreateWishlistItem(Transform parent, DbOutfit outfit)
+    {
+        GameObject item = CreatePanelObject("WishlistItem_" + outfit.outfit_id, parent, new Color(0.082f, 0.106f, 0.145f, 0.92f), new Color(1f, 1f, 1f, 0.16f));
+        RectTransform rect = item.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(0.5f, 1f);
+        rect.sizeDelta = new Vector2(0f, 92f);
+
+        LayoutElement layout = item.AddComponent<LayoutElement>();
+        layout.preferredHeight = 92f;
+        layout.minHeight = 92f;
+        layout.flexibleWidth = 1f;
+
+        GameObject thumb = CreateRoundImage("Thumbnail", item.transform, new Color(0.18f, 0.21f, 0.26f, 0.95f), new Color(1f, 1f, 1f, 0.14f), 58f);
+        SetRect(thumb.GetComponent<RectTransform>(), new Vector2(16f, -17f), new Vector2(58f, 58f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        Image thumbnailImage = thumb.GetComponent<Image>();
+        SetThumbnailImage(thumbnailImage, GetThumbnail(outfit.unity_category_code, outfit.unity_outfit_index));
+
+        Text category = CreateText("Category", item.transform, GetCategoryDisplayName(outfit), 15, FontStyle.Normal, TextAnchor.MiddleLeft);
+        category.color = mutedText;
+        SetRect(category.rectTransform, new Vector2(92f, -16f), new Vector2(190f, 24f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        Text name = CreateText("OutfitName", item.transform, GetDbOutfitName(outfit), 18, FontStyle.Bold, TextAnchor.MiddleLeft);
+        SetRect(name.rectTransform, new Vector2(92f, -46f), new Vector2(210f, 30f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        Button wear = CreateNeonButton("WearButton", item.transform, "착용", new Vector2(-150f, -24f), new Vector2(82f, 44f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        wear.onClick.AddListener(() =>
+        {
+            SelectOutfit(outfit.unity_category_code, outfit.unity_outfit_index);
+            SelectCategory(outfit.unity_category_code);
+            ShowMainPanel();
+        });
+
+        Button delete = CreateGrayButton("DeleteButton", item.transform, "삭제", new Vector2(-54f, -24f), new Vector2(82f, 44f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        delete.onClick.AddListener(() => StartCoroutine(RemoveFavoriteRoutine(outfit)));
     }
 
     private GameObject CreateLoginPanel(Transform parent)
@@ -822,8 +1295,42 @@ public class FitRoomMainUI : MonoBehaviour
         registerPasswordConfirmInput = CreateInputField(overlay.transform, "PasswordConfirmInput", "비밀번호 확인", 266f, true);
         Button register = CreateNeonButton("RegisterButton", target, "회원가입", new Vector2(56f, -330f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
         register.onClick.AddListener(() => StartCoroutine(RegisterRoutine()));
-        Button login = CreateNeonButton("GoLoginButton", target, "로그인", new Vector2(300f, -330f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
-        login.onClick.AddListener(ShowLoginPanel);
+        Button back = CreateGrayButton("BackToLoginButton", target, "이전으로", new Vector2(300f, -330f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        back.onClick.AddListener(ShowLoginPanel);
+        overlay.SetActive(false);
+        return overlay;
+    }
+
+    private GameObject CreateUserInfoPanel(Transform parent)
+    {
+        GameObject overlay = CreateModalPanel("UserInfoPanel", parent, "사용자 정보");
+        Transform dialog = overlay.transform.Find("Dialog");
+        Transform target = dialog != null ? dialog : overlay.transform;
+
+        Text nameLabel = CreateText("NameLabel", target, "이름", 16, FontStyle.Normal, TextAnchor.MiddleLeft);
+        nameLabel.color = mutedText;
+        SetRect(nameLabel.rectTransform, new Vector2(56f, -100f), new Vector2(100f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        userInfoNameText = CreateText("NameValue", target, "-", 19, FontStyle.Bold, TextAnchor.MiddleLeft);
+        SetRect(userInfoNameText.rectTransform, new Vector2(170f, -100f), new Vector2(350f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        Text phoneLabel = CreateText("PhoneLabel", target, "전화번호", 16, FontStyle.Normal, TextAnchor.MiddleLeft);
+        phoneLabel.color = mutedText;
+        SetRect(phoneLabel.rectTransform, new Vector2(56f, -142f), new Vector2(100f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        userInfoPhoneText = CreateText("PhoneValue", target, "-", 19, FontStyle.Bold, TextAnchor.MiddleLeft);
+        SetRect(userInfoPhoneText.rectTransform, new Vector2(170f, -142f), new Vector2(350f, 28f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        currentPasswordInput = CreateInputField(overlay.transform, "CurrentPasswordInput", "현재 비밀번호", 194f, true);
+        newPasswordInput = CreateInputField(overlay.transform, "NewPasswordInput", "새 비밀번호", 248f, true);
+        newPasswordConfirmInput = CreateInputField(overlay.transform, "NewPasswordConfirmInput", "새 비밀번호 확인", 302f, true);
+
+        Button change = CreateNeonButton("ChangePasswordButton", target, "변경완료", new Vector2(56f, -366f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        change.onClick.AddListener(() => StartCoroutine(ChangePasswordRoutine()));
+
+        Button logout = CreateGrayButton("LogoutButton", target, "로그아웃", new Vector2(300f, -366f), new Vector2(220f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        logout.onClick.AddListener(Logout);
+
         overlay.SetActive(false);
         return overlay;
     }
@@ -905,6 +1412,25 @@ public class FitRoomMainUI : MonoBehaviour
         button.targetGraphic = obj.GetComponent<Image>();
 
         Text text = CreateText("Label", obj.transform, label, 17, FontStyle.Bold, TextAnchor.MiddleCenter);
+        Stretch(text.rectTransform, 8f, 2f, -8f, -2f);
+        return button;
+    }
+
+    private Button CreateGrayButton(string objectName, Transform parent, string label, Vector2 position, Vector2 size, Vector2 anchorMin, Vector2 pivot)
+    {
+        GameObject obj = CreatePanelObject(objectName, parent, new Color(0.12f, 0.13f, 0.15f, 0.92f), new Color(1f, 1f, 1f, 0.2f));
+        RectTransform rect = obj.GetComponent<RectTransform>();
+        rect.anchorMin = anchorMin;
+        rect.anchorMax = anchorMin;
+        rect.pivot = pivot;
+        rect.anchoredPosition = position;
+        rect.sizeDelta = size;
+
+        Button button = obj.AddComponent<Button>();
+        button.targetGraphic = obj.GetComponent<Image>();
+
+        Text text = CreateText("Label", obj.transform, label, 17, FontStyle.Bold, TextAnchor.MiddleCenter);
+        text.color = new Color(0.82f, 0.84f, 0.88f, 1f);
         Stretch(text.rectTransform, 8f, 2f, -8f, -2f);
         return button;
     }
@@ -1079,6 +1605,10 @@ public class FitRoomMainUI : MonoBehaviour
 
     private string GetOutfitName(string categoryCode, int index)
     {
+        DbOutfit dbOutfit = GetDbOutfit(categoryCode, index);
+        if (dbOutfit != null && !string.IsNullOrEmpty(dbOutfit.outfit_name))
+            return dbOutfit.outfit_name;
+
         if (categoryCode == CategoryUpper)
             return GetUpperName(index);
 
@@ -1086,6 +1616,59 @@ public class FitRoomMainUI : MonoBehaviour
             return GetLowerName(index);
 
         return "Coming Soon";
+    }
+
+    private string GetSelectedOutfitDescription(string categoryCode, int index, string fallback)
+    {
+        DbOutfit dbOutfit = GetDbOutfit(categoryCode, index);
+        if (dbOutfit != null && !string.IsNullOrEmpty(dbOutfit.description))
+            return dbOutfit.description;
+
+        return fallback;
+    }
+
+    private DbOutfit GetDbOutfit(string categoryCode, int index)
+    {
+        DbOutfit outfit;
+        dbOutfitsByUnityKey.TryGetValue(GetFavoriteKey(categoryCode, index), out outfit);
+        return outfit;
+    }
+
+    private bool IsFavorite(string categoryCode, int index)
+    {
+        DbOutfit outfit = GetDbOutfit(categoryCode, index);
+        if (outfit != null && outfit.outfit_id > 0)
+            return favoriteOutfitIds.Contains(outfit.outfit_id);
+
+        return favoriteKeys.Contains(GetFavoriteKey(categoryCode, index));
+    }
+
+    private string GetDbOutfitName(DbOutfit outfit)
+    {
+        if (outfit != null && !string.IsNullOrEmpty(outfit.outfit_name))
+            return outfit.outfit_name;
+
+        return "의상";
+    }
+
+    private string GetCategoryDisplayName(DbOutfit outfit)
+    {
+        if (outfit != null && !string.IsNullOrEmpty(outfit.category_name))
+            return outfit.category_name;
+
+        if (outfit != null && outfit.unity_category_code == CategoryUpper)
+            return "상의";
+
+        if (outfit != null && outfit.unity_category_code == CategoryLower)
+            return "하의";
+
+        if (outfit != null && outfit.unity_category_code == CategoryHat)
+            return "모자";
+
+        if (outfit != null && outfit.unity_category_code == CategoryShoes)
+            return "신발";
+
+        return "의상";
     }
 
     private string GetUpperName(int index)
@@ -1264,6 +1847,7 @@ public class OutfitCardButton : MonoBehaviour
     public Button favoriteButton;
     public Image borderImage;
     public Text favoriteText;
+    public Text nameText;
     public GameObject checkMark;
 
     public void SetSelected(bool selected, Color selectedColor)
@@ -1304,4 +1888,53 @@ public class AuthUser
     public int user_id;
     public string name;
     public string phone;
+}
+
+[System.Serializable]
+public class ApiBasicResponse
+{
+    public bool ok;
+    public string message;
+}
+
+[System.Serializable]
+public class OutfitListResponse
+{
+    public bool ok;
+    public DbOutfit[] data;
+    public string message;
+}
+
+[System.Serializable]
+public class DbOutfit
+{
+    public int favorite_id;
+    public int outfit_id;
+    public string outfit_name;
+    public int category_id;
+    public string category_name;
+    public string category_code;
+    public string gender;
+    public string color;
+    public string description;
+    public string unity_category_code;
+    public int unity_outfit_index;
+    public string unity_outfit_key;
+    public string thumbnail_url;
+}
+
+[System.Serializable]
+public class FavoriteToggleResponse
+{
+    public bool ok;
+    public FavoriteToggleData data;
+    public string message;
+}
+
+[System.Serializable]
+public class FavoriteToggleData
+{
+    public int user_id;
+    public int outfit_id;
+    public bool is_favorite;
 }
