@@ -25,11 +25,13 @@ UNITY_IP = "127.0.0.1"
 
 BODY_PORT = 12000
 HEAD_PORT = 5006
+HAND_PORT = 5010
 FRAME_PORT = 13000
 FRAME_JPEG_QUALITY = 70
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 FACE_MODEL_PATH = PROJECT_ROOT / "models" / "face_landmarker.task"
+HAND_MODEL_PATH = PROJECT_ROOT / "models" / "hand_landmarker.task"
 
 # Lower capture resolution can improve FPS when webcam capture, decode, or
 # image preprocessing is a bottleneck. Try 640x480 first, then 424x240/320x240.
@@ -72,6 +74,54 @@ BODY_PRINT_INTERVAL = 1.0
 HEAD_SEND_INTERVAL = 0.033
 FACE_DETECT_INTERVAL = 0.05
 FACE_SCALE = 0.5
+
+# ==========================
+# 3-1. MediaPipe Hands gesture config
+# ==========================
+HAND_DETECT_INTERVAL = 0.05
+USE_RIGHT_HAND_ONLY = True
+SWAP_HANDEDNESS = False
+USE_MEDIAPIPE_FIST_PRESS = True
+USE_MEDIAPIPE_PALM_SWIPE = True
+USE_ROMP_HAND_TILT_GESTURE = False
+USE_MEDIAPIPE_POINT_GESTURE = False
+
+INVERT_SWIPE_X = True
+INVERT_SWIPE_Y = False
+SWIPE_X_THRESHOLD = 0.12
+SWIPE_Y_THRESHOLD = 0.10
+SWIPE_AXIS_RATIO = 1.4
+SWIPE_COOLDOWN = 0.85
+SWIPE_HISTORY_SECONDS = 0.35
+SWIPE_MIN_DURATION = 0.08
+SWIPE_MAX_DURATION = 0.75
+OPEN_PALM_UP_DY_THRESHOLD = -0.055
+OPEN_PALM_VERTICAL_RATIO = 1.45
+
+INVERT_ROMP_HAND_X = False
+INVERT_ROMP_HAND_Y = False
+ROMP_HAND_DIRECTION_THRESHOLD = 0.045
+ROMP_HAND_AXIS_RATIO = 1.25
+ROMP_HAND_COMMAND_COOLDOWN = 0.55
+
+INVERT_POINT_X = False
+INVERT_POINT_Y = False
+POINT_DIRECTION_THRESHOLD = 0.075
+POINT_AXIS_RATIO = 1.35
+POINT_HOLD_SECONDS = 0.32
+POINT_COMMAND_COOLDOWN = 0.65
+
+HAND_DEBUG_OVERLAY = True
+HAND_PRESS_MOVE_INTERVAL = 0.033
+INVERT_HAND_PRESS_X = True
+INVERT_HAND_PRESS_Y = False
+
+USE_MEDIAPIPE_THUMBS_UP_FAVORITE = True
+THUMBS_UP_COOLDOWN = 1.15
+THUMBS_UP_HOLD_SECONDS = 0.35
+THUMB_UP_DY_THRESHOLD = -0.025
+THUMB_VERTICAL_RATIO = 0.65
+FOLDED_FINGER_DY_THRESHOLD = -0.005
 
 INVERT_YAW = False
 INVERT_PITCH = False
@@ -335,6 +385,508 @@ def face_result_callback(result, output_image, timestamp_ms: int):
         latest_face_result = result
 
 
+class HandGestureDetector:
+    PALM_CENTER_IDS = (0, 5, 9, 13, 17)
+
+    def __init__(self):
+        self.enabled = False
+        self.hand_landmarker = None
+        if not HAND_MODEL_PATH.is_file():
+            print(f"[HAND] Disabled: missing model file: {HAND_MODEL_PATH}")
+            print("[HAND] Download MediaPipe hand_landmarker.task into the models folder to enable gestures.")
+        else:
+            hand_base_options = python.BaseOptions(model_asset_path=str(HAND_MODEL_PATH))
+            hand_options = vision.HandLandmarkerOptions(
+                base_options=hand_base_options,
+                running_mode=vision.RunningMode.IMAGE,
+                num_hands=1,
+                min_hand_detection_confidence=0.55,
+                min_hand_presence_confidence=0.55,
+                min_tracking_confidence=0.55,
+            )
+            self.hand_landmarker = vision.HandLandmarker.create_from_options(hand_options)
+            self.enabled = True
+            print("[HAND] Hand Landmarker initialized")
+
+        self.position_history = []
+        self.last_detect_time = 0.0
+        self.last_command_time = 0.0
+        self.last_swipe_time = 0.0
+        self.point_candidate = None
+        self.point_candidate_start_time = 0.0
+        self.fist_active = False
+        self.last_press_move_time = 0.0
+        self.last_press_position = None
+        self.last_thumbs_up_time = 0.0
+        self.thumbs_up_start_time = 0.0
+        self.debug = {
+            "hand": "None",
+            "pose": "disabled" if not self.enabled else "none",
+            "gesture": "",
+            "x": -1.0,
+            "y": -1.0,
+            "cooldown": 0.0,
+        }
+
+    def close(self):
+        if self.hand_landmarker is not None:
+            self.hand_landmarker.close()
+
+    def process(self, frame, now, sock):
+        if not self.enabled:
+            return self.debug
+
+        if (now - self.last_detect_time) < HAND_DETECT_INTERVAL:
+            return self.debug
+
+        self.last_detect_time = now
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        results = self.hand_landmarker.detect(mp_image)
+
+        self.debug["gesture"] = ""
+        self.debug["cooldown"] = max(0.0, (self.last_swipe_time + SWIPE_COOLDOWN) - now)
+
+        if not USE_MEDIAPIPE_FIST_PRESS and not USE_MEDIAPIPE_PALM_SWIPE and not USE_MEDIAPIPE_POINT_GESTURE:
+            return self.debug
+
+        if not results.hand_landmarks:
+            self._release_fist(sock, now)
+            self._reset_point_candidate()
+            self.debug.update({"hand": "None", "pose": "none", "x": -1.0, "y": -1.0})
+            return self.debug
+
+        selected = self._select_hand(results)
+        if selected is None:
+            self._release_fist(sock, now)
+            self._reset_point_candidate()
+            self.debug.update({"hand": "Other", "pose": "ignored", "x": -1.0, "y": -1.0})
+            return self.debug
+
+        landmarks, hand_label = selected
+        x, y = self._palm_center(landmarks)
+        pose = self._classify_pose(landmarks)
+        self.debug.update({"hand": hand_label, "pose": pose, "x": x, "y": y})
+
+        if USE_MEDIAPIPE_THUMBS_UP_FAVORITE and self._is_thumbs_up(landmarks):
+            self.position_history.clear()
+            self._reset_point_candidate()
+            self._release_fist(sock, now, x, y)
+            self._handle_thumbs_up(sock, now, x, y)
+            return self.debug
+        else:
+            self.thumbs_up_start_time = 0.0
+
+        if pose == "fist":
+            self.position_history.clear()
+            self._reset_point_candidate()
+            if USE_MEDIAPIPE_FIST_PRESS:
+                self._handle_fist(sock, now, x, y)
+            return self.debug
+
+        self._release_fist(sock, now, x, y)
+
+        if pose == "open" and USE_MEDIAPIPE_PALM_SWIPE and self._is_upright_open_palm(landmarks):
+            self._update_palm_swipe(sock, now, x, y)
+        else:
+            if pose == "open":
+                self.debug["pose"] = "open_not_upright"
+            self.position_history.clear()
+
+        if USE_MEDIAPIPE_POINT_GESTURE:
+            point_direction = self._get_index_point_direction(landmarks)
+            if point_direction is not None:
+                self._update_point_command(sock, now, point_direction, x, y)
+            else:
+                self._reset_point_candidate()
+        else:
+            self._reset_point_candidate()
+
+        return self.debug
+
+    def _select_hand(self, results):
+        for landmarks, handedness in zip(results.hand_landmarks, results.handedness):
+            label = "Unknown"
+            if handedness:
+                category = handedness[0]
+                label = getattr(category, "category_name", None) or getattr(category, "display_name", None) or "Unknown"
+
+            if SWAP_HANDEDNESS:
+                if label == "Right":
+                    label = "Left"
+                elif label == "Left":
+                    label = "Right"
+
+            if USE_RIGHT_HAND_ONLY and label != "Right":
+                continue
+
+            return landmarks, label
+
+        return None
+
+    def _palm_center(self, landmarks):
+        xs = [landmarks[i].x for i in self.PALM_CENTER_IDS]
+        ys = [landmarks[i].y for i in self.PALM_CENTER_IDS]
+        return float(np.mean(xs)), float(np.mean(ys))
+
+    def _classify_pose(self, landmarks):
+        finger_pairs = ((8, 6), (12, 10), (16, 14), (20, 18))
+        extended = 0
+        curled = 0
+        for tip, pip in finger_pairs:
+            if landmarks[tip].y < landmarks[pip].y - 0.015:
+                extended += 1
+            if landmarks[tip].y > landmarks[pip].y + 0.015:
+                curled += 1
+
+        if extended >= 3:
+            return "open"
+        if curled >= 3:
+            return "fist"
+        return "other"
+
+    def _update_palm_swipe(self, sock, now, x, y):
+        self.position_history.append((now, x, y))
+        cutoff = now - SWIPE_HISTORY_SECONDS
+        self.position_history = [item for item in self.position_history if item[0] >= cutoff]
+
+        if len(self.position_history) < 2:
+            return
+
+        if now - self.last_swipe_time < SWIPE_COOLDOWN:
+            return
+
+        start_t, start_x, start_y = self.position_history[0]
+        duration = now - start_t
+        if duration < SWIPE_MIN_DURATION or duration > SWIPE_MAX_DURATION:
+            return
+
+        dx = x - start_x
+        dy = y - start_y
+        direction = None
+
+        if abs(dx) > SWIPE_X_THRESHOLD and abs(dx) > abs(dy) * SWIPE_AXIS_RATIO:
+            direction = "right" if dx > 0 else "left"
+            if INVERT_SWIPE_X:
+                direction = "left" if direction == "right" else "right"
+        elif abs(dy) > SWIPE_Y_THRESHOLD and abs(dy) > abs(dx) * SWIPE_AXIS_RATIO:
+            direction = "down" if dy > 0 else "up"
+            if INVERT_SWIPE_Y:
+                direction = "up" if direction == "down" else "down"
+
+        if direction is None:
+            return
+
+        self._send(sock, {
+            "type": "swipe",
+            "dir": direction,
+            "hand": "right",
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "timestamp": now,
+        })
+        self.debug["gesture"] = "palm " + direction
+        self.last_swipe_time = now
+        self.position_history.clear()
+
+    def _is_thumbs_up(self, landmarks):
+        wrist = landmarks[0]
+        thumb_tip = landmarks[4]
+        thumb_mcp = landmarks[2]
+        thumb_dx = thumb_tip.x - thumb_mcp.x
+        thumb_dy = thumb_tip.y - thumb_mcp.y
+        thumb_points_up = thumb_dy < THUMB_UP_DY_THRESHOLD and abs(thumb_dy) > abs(thumb_dx) * THUMB_VERTICAL_RATIO
+        thumb_above_wrist = thumb_tip.y < wrist.y - 0.035
+
+        folded = 0
+        for tip_id, pip_id in ((8, 6), (12, 10), (16, 14), (20, 18)):
+            if landmarks[tip_id].y > landmarks[pip_id].y + FOLDED_FINGER_DY_THRESHOLD:
+                folded += 1
+
+        return thumb_points_up and thumb_above_wrist and folded >= 3
+
+    def _handle_thumbs_up(self, sock, now, x, y):
+        self.debug["pose"] = "thumbs_up"
+        if now - self.last_thumbs_up_time < THUMBS_UP_COOLDOWN:
+            return
+
+        if self.thumbs_up_start_time <= 0.0:
+            self.thumbs_up_start_time = now
+            return
+
+        if now - self.thumbs_up_start_time < THUMBS_UP_HOLD_SECONDS:
+            self.debug["gesture"] = "thumbs_up_hold"
+            return
+
+        self._send(sock, {
+            "type": "thumbs_up_favorite",
+            "hand": "right",
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "timestamp": now,
+        })
+        self.debug["gesture"] = "thumbs_up_favorite"
+        self.last_thumbs_up_time = now
+        self.thumbs_up_start_time = 0.0
+
+    def _is_upright_open_palm(self, landmarks):
+        wrist = landmarks[0]
+        finger_tips = [landmarks[i] for i in (8, 12, 16, 20)]
+        finger_mcps = [landmarks[i] for i in (5, 9, 13, 17)]
+
+        vertical_count = 0
+        for tip, mcp in zip(finger_tips, finger_mcps):
+            dx = tip.x - mcp.x
+            dy = tip.y - mcp.y
+            if dy < OPEN_PALM_UP_DY_THRESHOLD and abs(dy) > abs(dx) * OPEN_PALM_VERTICAL_RATIO:
+                vertical_count += 1
+
+        fingertip_center_x = float(np.mean([tip.x for tip in finger_tips]))
+        fingertip_center_y = float(np.mean([tip.y for tip in finger_tips]))
+        hand_dx = fingertip_center_x - wrist.x
+        hand_dy = fingertip_center_y - wrist.y
+        hand_points_up = hand_dy < OPEN_PALM_UP_DY_THRESHOLD and abs(hand_dy) > abs(hand_dx) * 0.9
+
+        return vertical_count >= 3 and hand_points_up
+
+    def _get_index_point_direction(self, landmarks):
+        index_mcp = landmarks[5]
+        index_tip = landmarks[8]
+        dx = index_tip.x - index_mcp.x
+        dy = index_tip.y - index_mcp.y
+
+        if abs(dx) < POINT_DIRECTION_THRESHOLD and abs(dy) < POINT_DIRECTION_THRESHOLD:
+            return None
+
+        if abs(dx) > abs(dy) * POINT_AXIS_RATIO:
+            direction = "right" if dx > 0 else "left"
+            if INVERT_POINT_X:
+                direction = "left" if direction == "right" else "right"
+            return direction
+
+        if abs(dy) > abs(dx) * POINT_AXIS_RATIO:
+            direction = "down" if dy > 0 else "up"
+            if INVERT_POINT_Y:
+                direction = "up" if direction == "down" else "down"
+            return direction
+
+        return None
+
+    def _update_point_command(self, sock, now, direction, x, y):
+        self.debug["pose"] = "point_" + direction
+
+        if now - self.last_command_time < POINT_COMMAND_COOLDOWN:
+            return
+
+        if self.point_candidate != direction:
+            self.point_candidate = direction
+            self.point_candidate_start_time = now
+            return
+
+        if now - self.point_candidate_start_time < POINT_HOLD_SECONDS:
+            return
+
+        self._send(sock, {
+            "type": "swipe",
+            "dir": direction,
+            "hand": "right",
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "timestamp": now,
+        })
+        self.debug["gesture"] = "point " + direction
+        self.last_command_time = now
+        self._reset_point_candidate()
+
+    def _reset_point_candidate(self):
+        self.point_candidate = None
+        self.point_candidate_start_time = 0.0
+
+    def _handle_fist(self, sock, now, x, y):
+        x, y = self._map_press_position(x, y)
+        payload = {
+            "hand": "right",
+            "x": round(x, 4),
+            "y": round(y, 4),
+            "timestamp": now,
+        }
+
+        if not self.fist_active:
+            self.fist_active = True
+            self.last_press_position = (x, y)
+            self.last_press_move_time = now
+            payload["type"] = "press_start"
+            self._send(sock, payload)
+            self.debug["gesture"] = "press_start"
+            return
+
+        if now - self.last_press_move_time >= HAND_PRESS_MOVE_INTERVAL:
+            self.last_press_position = (x, y)
+            self.last_press_move_time = now
+            payload["type"] = "press_move"
+            self._send(sock, payload)
+            self.debug["gesture"] = "press_move"
+
+    def _map_press_position(self, x, y):
+        if INVERT_HAND_PRESS_X:
+            x = 1.0 - x
+        if INVERT_HAND_PRESS_Y:
+            y = 1.0 - y
+        return x, y
+
+    def _release_fist(self, sock, now, x=None, y=None):
+        if not self.fist_active:
+            return
+
+        if x is None or y is None:
+            if self.last_press_position is not None:
+                x, y = self.last_press_position
+            else:
+                x, y = 0.5, 0.5
+
+        x, y = self._map_press_position(float(x), float(y))
+        self.fist_active = False
+        self.last_press_position = None
+        self._send(sock, {
+            "type": "press_release",
+            "hand": "right",
+            "x": round(float(x), 4),
+            "y": round(float(y), 4),
+            "timestamp": now,
+        })
+        self.debug["gesture"] = "press_release"
+
+    def _send(self, sock, payload):
+        message = json.dumps(payload).encode("utf-8")
+        sock.sendto(message, (UNITY_IP, HAND_PORT))
+
+
+class RompHandTiltGestureDetector:
+    RIGHT_WRIST = 21
+    RIGHT_FINGER_IDS = (41, 42, 43, 44)
+
+    def __init__(self):
+        self.last_command_time = 0.0
+        self.debug = {
+            "hand": "ROMP_R",
+            "pose": "romp_none",
+            "gesture": "",
+            "x": -1.0,
+            "y": -1.0,
+            "cooldown": 0.0,
+        }
+
+    def process(self, outputs, now, sock, frame_shape):
+        self.debug["gesture"] = ""
+        self.debug["cooldown"] = max(0.0, (self.last_command_time + ROMP_HAND_COMMAND_COOLDOWN) - now)
+
+        if outputs is None or "pj2d_org" not in outputs:
+            self.debug.update({"pose": "romp_none", "x": -1.0, "y": -1.0})
+            return self.debug
+
+        points = np.asarray(outputs["pj2d_org"], dtype=np.float32)
+        if points.ndim != 3 or points.shape[0] < 1 or points.shape[1] <= max(self.RIGHT_FINGER_IDS):
+            self.debug.update({"pose": "romp_invalid", "x": -1.0, "y": -1.0})
+            return self.debug
+
+        person = points[0]
+        wrist = person[self.RIGHT_WRIST]
+        fingers = person[list(self.RIGHT_FINGER_IDS)]
+        finger_center = np.mean(fingers, axis=0)
+
+        height, width = frame_shape[:2]
+        if width <= 0 or height <= 0:
+            return self.debug
+
+        wrist_x = float(wrist[0] / width)
+        wrist_y = float(wrist[1] / height)
+        finger_x = float(finger_center[0] / width)
+        finger_y = float(finger_center[1] / height)
+        dx = finger_x - wrist_x
+        dy = finger_y - wrist_y
+
+        self.debug.update({"x": finger_x, "y": finger_y})
+
+        direction = self._direction_from_vector(dx, dy)
+        if direction is None:
+            self.debug["pose"] = "romp_neutral"
+            return self.debug
+
+        self.debug["pose"] = "romp_" + direction
+
+        if now - self.last_command_time < ROMP_HAND_COMMAND_COOLDOWN:
+            return self.debug
+
+        self._send(sock, {
+            "type": "swipe",
+            "dir": direction,
+            "hand": "right",
+            "x": round(finger_x, 4),
+            "y": round(finger_y, 4),
+            "timestamp": now,
+        })
+        self.debug["gesture"] = "romp " + direction
+        self.last_command_time = now
+        return self.debug
+
+    def _direction_from_vector(self, dx, dy):
+        if abs(dx) < ROMP_HAND_DIRECTION_THRESHOLD and abs(dy) < ROMP_HAND_DIRECTION_THRESHOLD:
+            return None
+
+        if abs(dx) > abs(dy) * ROMP_HAND_AXIS_RATIO:
+            direction = "right" if dx > 0 else "left"
+            if INVERT_ROMP_HAND_X:
+                direction = "left" if direction == "right" else "right"
+            return direction
+
+        if abs(dy) > abs(dx) * ROMP_HAND_AXIS_RATIO:
+            direction = "down" if dy > 0 else "up"
+            if INVERT_ROMP_HAND_Y:
+                direction = "up" if direction == "down" else "down"
+            return direction
+
+        return None
+
+    def _send(self, sock, payload):
+        message = json.dumps(payload).encode("utf-8")
+        sock.sendto(message, (UNITY_IP, HAND_PORT))
+
+
+def draw_hand_debug(display, debug):
+    if not HAND_DEBUG_OVERLAY:
+        return
+
+    hand = debug.get("hand", "None")
+    pose = debug.get("pose", "none")
+    gesture = debug.get("gesture", "")
+    x = debug.get("x", -1.0)
+    y = debug.get("y", -1.0)
+    cooldown = debug.get("cooldown", 0.0)
+
+    cv2.putText(
+        display,
+        f"Hand: {hand} | Pose: {pose} | Gesture: {gesture}",
+        (20, 90),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 180, 80),
+        2,
+    )
+    cv2.putText(
+        display,
+        f"Palm: {x:.2f}, {y:.2f} | Cooldown: {cooldown:.2f}",
+        (20, 118),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 180, 80),
+        2,
+    )
+
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+        height, width = display.shape[:2]
+        cv2.circle(display, (int(x * width), int(y * height)), 8, (255, 80, 180), -1)
+
+
 def extract_romp_smpl24(outputs) -> Optional[np.ndarray]:
     if outputs is None:
         return None
@@ -471,7 +1023,10 @@ def main():
     )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print(f"UDP ready -> body:{BODY_PORT}, head:{HEAD_PORT}")
+    print(f"UDP ready -> body:{BODY_PORT}, head:{HEAD_PORT}, hand:{HAND_PORT}")
+
+    hand_detector = HandGestureDetector()
+    romp_hand_detector = RompHandTiltGestureDetector()
 
     rs_capture = RealSenseCapture(CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS).start()
     frame_server = LatestJpegServer(port=FRAME_PORT).start()
@@ -483,6 +1038,7 @@ def main():
     body_packet_count = 0
     last_fit_metric = None
     body_detected = False
+    hand_debug = {"hand": "None", "pose": "none", "gesture": "", "x": -1.0, "y": -1.0, "cooldown": 0.0}
 
     try:
         with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker:
@@ -521,8 +1077,12 @@ def main():
                     face_landmarker.detect_async(mp_image, int(now * 1000))
                     prev_face_detect_time = now
 
+                hand_debug = hand_detector.process(body_frame, now, sock)
+
                 try:
                     outputs = body_model(body_frame)
+                    if USE_ROMP_HAND_TILT_GESTURE:
+                        hand_debug = romp_hand_detector.process(outputs, now, sock, body_frame.shape)
                     smpl24 = extract_romp_smpl24(outputs)
 
                     if smpl24 is not None:
@@ -600,6 +1160,8 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2,
                         )
 
+                    draw_hand_debug(display, hand_debug)
+
                     cv2.imshow("ROMP + Face Sender", display)
 
                 if ENABLE_CONSOLE_LOG and matrix_ok and (now - prev_print_time) >= PRINT_INTERVAL:
@@ -627,6 +1189,11 @@ def main():
 
         try:
             frame_server.stop()
+        except Exception:
+            pass
+
+        try:
+            hand_detector.close()
         except Exception:
             pass
 

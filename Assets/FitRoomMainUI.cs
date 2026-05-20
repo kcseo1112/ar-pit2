@@ -76,9 +76,12 @@ public class FitRoomMainUI : MonoBehaviour
     private RectTransform favoriteDropZoneRect;
     private GameObject favoriteGhostCard;
     private RectTransform favoriteGhostRect;
+    private Coroutine favoriteAutoDropRoutine;
+    private Coroutine favoriteDropZonePulseRoutine;
     private bool isFavoritePressTracking;
     private bool isFavoriteGhostDragging;
     private float favoritePressStartTime;
+    private float handPressFocusPadding = 120f;
     private Text modeAllText;
     private Text modeFavoritesText;
     private Image modeAllBorder;
@@ -130,6 +133,7 @@ public class FitRoomMainUI : MonoBehaviour
         if (outfitManager == null)
             outfitManager = FindObjectOfType<OutfitManager>();
 
+        EnsureGestureReceiver();
         EnsureRuntimeLayout();
     }
 
@@ -172,8 +176,8 @@ public class FitRoomMainUI : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Tab))
             OnGestureToggleListMode();
 
-        HandleFocusedFavoriteDrag();
         HandleMouseCarouselDrag();
+        HandleFocusedFavoriteDrag();
     }
 
     public void Rebuild()
@@ -329,7 +333,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void HandleMouseCarouselDrag()
     {
-        if (isFavoritePressTracking || isFavoriteGhostDragging)
+        if (isFavoriteGhostDragging)
             return;
 
         if (Input.GetMouseButtonDown(0))
@@ -356,34 +360,77 @@ public class FitRoomMainUI : MonoBehaviour
 
         Vector2 mousePosition = Input.mousePosition;
 
-        if (Input.GetMouseButtonDown(0) && IsPointerOverFocusedCard(mousePosition))
-        {
-            isFavoritePressTracking = true;
-            favoritePressStartTime = Time.unscaledTime;
-        }
+        if (Input.GetMouseButtonDown(0))
+            BeginFavoritePress(mousePosition, true);
 
-        if (isFavoritePressTracking && Input.GetMouseButton(0) && !isFavoriteGhostDragging)
+        if (Input.GetMouseButton(0))
+            UpdateFavoritePress(mousePosition);
+
+        if (Input.GetMouseButtonUp(0))
+            EndFavoritePress(mousePosition);
+    }
+
+    public void OnHandPressStart(Vector2 screenPosition)
+    {
+        BeginFavoritePress(screenPosition, true, handPressFocusPadding);
+    }
+
+    public void OnHandPressMove(Vector2 screenPosition)
+    {
+        UpdateFavoritePress(screenPosition);
+    }
+
+    public void OnHandPressRelease(Vector2 screenPosition)
+    {
+        EndFavoritePress(screenPosition);
+    }
+
+    private void BeginFavoritePress(Vector2 screenPosition, bool requireFocusedCardHit)
+    {
+        BeginFavoritePress(screenPosition, requireFocusedCardHit, 0f);
+    }
+
+    private void BeginFavoritePress(Vector2 screenPosition, bool requireFocusedCardHit, float padding)
+    {
+        if (isCarouselAnimating || isFavoritePressTracking || isFavoriteGhostDragging)
+            return;
+
+        if (requireFocusedCardHit && !IsPointerOverFocusedCard(screenPosition, padding))
+            return;
+
+        isFavoritePressTracking = true;
+        favoritePressStartTime = Time.unscaledTime;
+    }
+
+    private void UpdateFavoritePress(Vector2 screenPosition)
+    {
+        if (!isFavoritePressTracking)
+            return;
+
+        if (!isFavoriteGhostDragging && Time.unscaledTime - favoritePressStartTime >= 0.38f)
         {
-            if (Time.unscaledTime - favoritePressStartTime >= 0.38f)
-            {
-                CreateFavoriteGhostCard(mousePosition);
-                isFavoriteGhostDragging = true;
-                isMouseDraggingCarousel = false;
-            }
+            CreateFavoriteGhostCard(screenPosition);
+            isFavoriteGhostDragging = true;
+            isMouseDraggingCarousel = false;
         }
 
         if (isFavoriteGhostDragging)
-            UpdateFavoriteGhostPosition(mousePosition);
+            UpdateFavoriteGhostPosition(screenPosition);
+    }
 
-        if (!isFavoritePressTracking || !Input.GetMouseButtonUp(0))
+    private void EndFavoritePress(Vector2 screenPosition)
+    {
+        if (!isFavoritePressTracking)
             return;
 
-        bool droppedOnZone = isFavoriteGhostDragging && IsPointerOverFavoriteDropZone(mousePosition);
+        bool droppedOnZone = isFavoriteGhostDragging && IsPointerOverFavoriteDropZone(screenPosition);
+        bool wasGhostDragging = isFavoriteGhostDragging;
         DestroyFavoriteGhostCard();
 
         isFavoriteGhostDragging = false;
         isFavoritePressTracking = false;
-        isMouseDraggingCarousel = false;
+        if (wasGhostDragging)
+            isMouseDraggingCarousel = false;
 
         if (droppedOnZone)
             AddFavoriteFocusedOutfit();
@@ -449,6 +496,14 @@ public class FitRoomMainUI : MonoBehaviour
     public void OnGestureFavoritePull()
     {
         ToggleFavoriteFocusedOutfit();
+    }
+
+    public void OnGestureThumbsUpFavorite()
+    {
+        if (favoriteAutoDropRoutine != null)
+            StopCoroutine(favoriteAutoDropRoutine);
+
+        favoriteAutoDropRoutine = StartCoroutine(AnimateFocusedFavoriteToDropZone());
     }
 
     public void OnGestureToggleListMode()
@@ -703,11 +758,30 @@ public class FitRoomMainUI : MonoBehaviour
 
     private bool IsPointerOverFocusedCard(Vector2 screenPosition)
     {
+        return IsPointerOverFocusedCard(screenPosition, 0f);
+    }
+
+    private bool IsPointerOverFocusedCard(Vector2 screenPosition, float padding)
+    {
         OutfitCardButton focusedCard = GetFocusedOutfitCard();
         if (focusedCard == null || focusedCard.rectTransform == null)
             return false;
 
-        return RectTransformUtility.RectangleContainsScreenPoint(focusedCard.rectTransform, screenPosition, GetUICamera());
+        if (padding <= 0f)
+            return RectTransformUtility.RectangleContainsScreenPoint(focusedCard.rectTransform, screenPosition, GetUICamera());
+
+        Vector3[] corners = new Vector3[4];
+        focusedCard.rectTransform.GetWorldCorners(corners);
+        Camera uiCamera = GetUICamera();
+        Vector2 bottomLeft = RectTransformUtility.WorldToScreenPoint(uiCamera, corners[0]);
+        Vector2 topRight = RectTransformUtility.WorldToScreenPoint(uiCamera, corners[2]);
+        Rect expanded = Rect.MinMaxRect(
+            bottomLeft.x - padding,
+            bottomLeft.y - padding,
+            topRight.x + padding,
+            topRight.y + padding
+        );
+        return expanded.Contains(screenPosition);
     }
 
     private bool IsPointerOverFavoriteDropZone(Vector2 screenPosition)
@@ -785,6 +859,88 @@ public class FitRoomMainUI : MonoBehaviour
 
         favoriteGhostCard = null;
         favoriteGhostRect = null;
+    }
+
+    private IEnumerator AnimateFocusedFavoriteToDropZone()
+    {
+        if (favoriteDropZoneRect == null || mainPanel == null)
+            yield break;
+
+        OutfitCardButton focusedCard = GetFocusedOutfitCard();
+        Vector2 startScreenPosition = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        if (focusedCard != null && focusedCard.rectTransform != null)
+            startScreenPosition = RectTransformUtility.WorldToScreenPoint(GetUICamera(), focusedCard.rectTransform.position);
+
+        CreateFavoriteGhostCard(startScreenPosition);
+        if (favoriteGhostRect == null)
+            yield break;
+
+        RectTransform mainRect = mainPanel.GetComponent<RectTransform>();
+        Vector2 start = favoriteGhostRect.anchoredPosition;
+        Vector2 target;
+        Vector2 dropScreenPosition = RectTransformUtility.WorldToScreenPoint(GetUICamera(), favoriteDropZoneRect.position);
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(mainRect, dropScreenPosition, GetUICamera(), out target);
+
+        const float duration = 0.42f;
+        float elapsed = 0f;
+        Vector3 startScale = Vector3.one;
+        Vector3 endScale = new Vector3(0.62f, 0.62f, 1f);
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+            Vector2 arc = Vector2.up * Mathf.Sin(t * Mathf.PI) * 54f;
+            favoriteGhostRect.anchoredPosition = Vector2.LerpUnclamped(start, target, eased) + arc;
+            favoriteGhostRect.localScale = Vector3.LerpUnclamped(startScale, endScale, eased);
+            yield return null;
+        }
+
+        DestroyFavoriteGhostCard();
+        AddFavoriteFocusedOutfit();
+
+        if (favoriteDropZonePulseRoutine != null)
+            StopCoroutine(favoriteDropZonePulseRoutine);
+        favoriteDropZonePulseRoutine = StartCoroutine(PulseFavoriteDropZone());
+
+        favoriteAutoDropRoutine = null;
+    }
+
+    private IEnumerator PulseFavoriteDropZone()
+    {
+        if (favoriteDropZoneRect == null)
+            yield break;
+
+        Image zoneImage = favoriteDropZoneRect.GetComponent<Image>();
+        Color originalColor = zoneImage != null ? zoneImage.color : Color.clear;
+        Vector2 originalPosition = favoriteDropZoneRect.anchoredPosition;
+        Vector3 originalScale = favoriteDropZoneRect.localScale;
+        Color pulseColor = new Color(1f, 0.12f, 0.33f, 0.78f);
+
+        const float duration = 0.32f;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float wave = Mathf.Sin(t * Mathf.PI);
+            favoriteDropZoneRect.localScale = originalScale * (1f + wave * 0.16f);
+            favoriteDropZoneRect.anchoredPosition = originalPosition + Vector2.up * wave * 18f;
+
+            if (zoneImage != null)
+                zoneImage.color = Color.Lerp(originalColor, pulseColor, wave);
+
+            yield return null;
+        }
+
+        favoriteDropZoneRect.localScale = originalScale;
+        favoriteDropZoneRect.anchoredPosition = originalPosition;
+        if (zoneImage != null)
+            zoneImage.color = originalColor;
+
+        favoriteDropZonePulseRoutine = null;
     }
 
     private Camera GetUICamera()
@@ -2628,6 +2784,15 @@ public class FitRoomMainUI : MonoBehaviour
             return;
 
         new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
+    }
+
+    private void EnsureGestureReceiver()
+    {
+        GestureReceiverUDP receiver = FindObjectOfType<GestureReceiverUDP>();
+        if (receiver == null)
+            receiver = gameObject.AddComponent<GestureReceiverUDP>();
+
+        receiver.fitRoomUI = this;
     }
 
     private void DestroyRuntimeObject(GameObject obj)
