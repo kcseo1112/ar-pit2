@@ -27,10 +27,22 @@ public class FitRoomMainUI : MonoBehaviour
     [Header("API")]
     public string apiBaseUrl = "http://127.0.0.1:5000";
 
+    [Header("Carousel Motion")]
+    [SerializeField] private float carouselAnimationDuration = 0.24f;
+    [SerializeField] private AnimationCurve carouselEase = null;
+
     private const string CategoryUpper = "upper";
     private const string CategoryLower = "lower";
     private const string CategoryHat = "hat";
     private const string CategoryShoes = "shoes";
+    private const float CarouselSlotSpacing = 170f;
+    private const float CarouselFarDistance = 340f;
+
+    private enum ListMode
+    {
+        All,
+        Favorites
+    }
 
     private readonly List<OutfitCardButton> outfitCards = new List<OutfitCardButton>();
     private readonly HashSet<string> favoriteKeys = new HashSet<string>();
@@ -45,12 +57,34 @@ public class FitRoomMainUI : MonoBehaviour
 
     private string activeCategory = CategoryUpper;
     private string activeWishlistCategory = "all";
+    private ListMode currentListMode = ListMode.All;
+    private int focusedUpperIndex = 0;
+    private int focusedLowerIndex = 0;
+    private int focusedHatIndex = 0;
+    private int focusedShoesIndex = 0;
     private Font runtimeFont;
     private Sprite roundedSprite;
     private Sprite circleSprite;
 
     private Transform carouselContent;
     private ScrollRect carouselScrollRect;
+    private Transform verticalCarouselContent;
+    private Coroutine carouselAnimationRoutine;
+    private bool isCarouselAnimating;
+    private bool isMouseDraggingCarousel;
+    private Vector2 mouseDragStartPosition;
+    private RectTransform favoriteDropZoneRect;
+    private GameObject favoriteGhostCard;
+    private RectTransform favoriteGhostRect;
+    private bool isFavoritePressTracking;
+    private bool isFavoriteGhostDragging;
+    private float favoritePressStartTime;
+    private Text modeAllText;
+    private Text modeFavoritesText;
+    private Image modeAllBorder;
+    private Image modeFavoritesBorder;
+    private Text favoriteDropZoneText;
+    private Image favoriteDropZoneBorder;
     private Image currentUpperThumbnailImage;
     private Image currentLowerThumbnailImage;
     private Image currentHatThumbnailImage;
@@ -90,6 +124,9 @@ public class FitRoomMainUI : MonoBehaviour
 
     void Awake()
     {
+        if (carouselEase == null || carouselEase.length == 0)
+            carouselEase = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+
         if (outfitManager == null)
             outfitManager = FindObjectOfType<OutfitManager>();
 
@@ -112,6 +149,33 @@ public class FitRoomMainUI : MonoBehaviour
         SelectCategory(CategoryUpper);
     }
 
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.W))
+            OnGestureSwipeUp();
+
+        if (Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.S))
+            OnGestureSwipeDown();
+
+        if (Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A))
+            OnGestureSwipeLeft();
+
+        if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D))
+            OnGestureSwipeRight();
+
+        if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+            OnGestureFistHoldConfirmed();
+
+        if (Input.GetKeyDown(KeyCode.F))
+            OnGestureFavoritePull();
+
+        if (Input.GetKeyDown(KeyCode.Tab))
+            OnGestureToggleListMode();
+
+        HandleFocusedFavoriteDrag();
+        HandleMouseCarouselDrag();
+    }
+
     public void Rebuild()
     {
         EnsureRuntimeLayout();
@@ -123,10 +187,273 @@ public class FitRoomMainUI : MonoBehaviour
     public void SelectCategory(string categoryCode)
     {
         activeCategory = categoryCode;
+        if (currentListMode == ListMode.Favorites)
+            SetFocusedIndex(categoryCode, 0);
         RebuildCarousel();
         RefreshCategoryTabs();
         RefreshCategoryInfoPanel();
         StartCoroutine(LoadCategoryOutfitsRoutine(categoryCode));
+    }
+
+    public void MoveCategory(int delta)
+    {
+        string[] categories = { CategoryUpper, CategoryLower, CategoryHat, CategoryShoes };
+        int current = 0;
+
+        for (int i = 0; i < categories.Length; i++)
+        {
+            if (categories[i] == activeCategory)
+            {
+                current = i;
+                break;
+            }
+        }
+
+        SelectCategory(categories[GetCircularIndex(current + delta, categories.Length)]);
+    }
+
+    public void MoveFocus(int delta)
+    {
+        if (isCarouselAnimating)
+            return;
+
+        if (currentListMode == ListMode.Favorites)
+        {
+            List<DbOutfit> favorites = GetFilteredFavoriteOutfits();
+            if (favorites.Count == 0)
+                return;
+        }
+
+        if (GetFocusedCount(activeCategory) <= 0)
+            return;
+
+        if (carouselAnimationRoutine != null)
+            StopCoroutine(carouselAnimationRoutine);
+
+        carouselAnimationRoutine = StartCoroutine(AnimateFocusMove(delta));
+    }
+
+    public void ConfirmFocusedOutfit()
+    {
+        DbOutfit focusedOutfit = GetFocusedDbOutfit();
+        if (focusedOutfit != null)
+        {
+            SelectOutfit(focusedOutfit.unity_category_code, focusedOutfit.unity_outfit_index);
+            return;
+        }
+
+        SelectOutfit(activeCategory, GetFocusedIndex(activeCategory));
+    }
+
+    public void ToggleFavoriteFocusedOutfit()
+    {
+        DbOutfit outfit = GetFocusedDbOutfit();
+        if (outfit == null || outfit.outfit_id <= 0)
+        {
+            Debug.LogWarning("[FitRoomUI] 현재 focus 의상의 DB 정보가 없어 찜할 수 없습니다.");
+            return;
+        }
+
+        ToggleFavorite(outfit.unity_category_code, outfit.unity_outfit_index);
+    }
+
+    private void AddFavoriteFocusedOutfit()
+    {
+        if (loggedInUserId <= 0)
+        {
+            ShowLoginPanel();
+            return;
+        }
+
+        DbOutfit outfit = GetFocusedDbOutfit();
+        if (outfit == null || outfit.outfit_id <= 0)
+        {
+            Debug.LogWarning("[FitRoomUI] 현재 focus 의상의 DB 정보가 없어 찜할 수 없습니다.");
+            return;
+        }
+
+        if (IsFavorite(outfit.unity_category_code, outfit.unity_outfit_index))
+            return;
+
+        StartCoroutine(ToggleFavoriteRoutine(outfit));
+    }
+
+    private IEnumerator AnimateFocusMove(int delta)
+    {
+        RectTransform root = verticalCarouselContent as RectTransform;
+        if (root == null)
+        {
+            SetFocusedIndex(activeCategory, GetCircularIndex(GetFocusedIndex(activeCategory) + delta, GetFocusedCount(activeCategory)));
+            RebuildCarousel();
+            RefreshCategoryInfoPanel();
+            ConfirmFocusedOutfit();
+            yield break;
+        }
+
+        isCarouselAnimating = true;
+
+        Vector2 start = root.anchoredPosition;
+        root.anchoredPosition = start;
+        if (delta > 0)
+            RebuildCarousel(-2, 3);
+        else
+            RebuildCarousel(-3, 2);
+        root.anchoredPosition = start;
+        RefreshCoverFlowVisuals(root.anchoredPosition.y);
+
+        float direction = delta > 0 ? 1f : -1f;
+        Vector2 target = start + new Vector2(0f, direction * CarouselSlotSpacing);
+        float duration = Mathf.Max(0.05f, carouselAnimationDuration);
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float eased = carouselEase != null ? carouselEase.Evaluate(t) : t;
+            root.anchoredPosition = Vector2.LerpUnclamped(start, target, eased);
+            RefreshCoverFlowVisuals(root.anchoredPosition.y);
+            yield return null;
+        }
+
+        SetFocusedIndex(activeCategory, GetCircularIndex(GetFocusedIndex(activeCategory) + delta, GetFocusedCount(activeCategory)));
+        root.anchoredPosition = start;
+        RebuildCarousel();
+        RefreshCategoryInfoPanel();
+        RefreshCoverFlowVisuals(root.anchoredPosition.y);
+        ConfirmFocusedOutfit();
+
+        isCarouselAnimating = false;
+        carouselAnimationRoutine = null;
+    }
+
+    private void HandleMouseCarouselDrag()
+    {
+        if (isFavoritePressTracking || isFavoriteGhostDragging)
+            return;
+
+        if (Input.GetMouseButtonDown(0))
+        {
+            isMouseDraggingCarousel = true;
+            mouseDragStartPosition = Input.mousePosition;
+        }
+
+        if (!isMouseDraggingCarousel || !Input.GetMouseButtonUp(0))
+            return;
+
+        isMouseDraggingCarousel = false;
+        float deltaY = ((Vector2)Input.mousePosition).y - mouseDragStartPosition.y;
+        if (Mathf.Abs(deltaY) < 55f)
+            return;
+
+        MoveFocus(deltaY > 0f ? 1 : -1);
+    }
+
+    private void HandleFocusedFavoriteDrag()
+    {
+        if (isCarouselAnimating)
+            return;
+
+        Vector2 mousePosition = Input.mousePosition;
+
+        if (Input.GetMouseButtonDown(0) && IsPointerOverFocusedCard(mousePosition))
+        {
+            isFavoritePressTracking = true;
+            favoritePressStartTime = Time.unscaledTime;
+        }
+
+        if (isFavoritePressTracking && Input.GetMouseButton(0) && !isFavoriteGhostDragging)
+        {
+            if (Time.unscaledTime - favoritePressStartTime >= 0.38f)
+            {
+                CreateFavoriteGhostCard(mousePosition);
+                isFavoriteGhostDragging = true;
+                isMouseDraggingCarousel = false;
+            }
+        }
+
+        if (isFavoriteGhostDragging)
+            UpdateFavoriteGhostPosition(mousePosition);
+
+        if (!isFavoritePressTracking || !Input.GetMouseButtonUp(0))
+            return;
+
+        bool droppedOnZone = isFavoriteGhostDragging && IsPointerOverFavoriteDropZone(mousePosition);
+        DestroyFavoriteGhostCard();
+
+        isFavoriteGhostDragging = false;
+        isFavoritePressTracking = false;
+        isMouseDraggingCarousel = false;
+
+        if (droppedOnZone)
+            AddFavoriteFocusedOutfit();
+    }
+
+    public void SetListModeAll()
+    {
+        currentListMode = ListMode.All;
+        RebuildCarousel();
+    }
+
+    public void SetListModeFavorites()
+    {
+        if (loggedInUserId <= 0)
+        {
+            ShowLoginPanel();
+            return;
+        }
+
+        currentListMode = ListMode.Favorites;
+        StartCoroutine(LoadWishlistRoutine());
+        RebuildCarousel();
+    }
+
+    public void ToggleListMode()
+    {
+        if (currentListMode == ListMode.All)
+            SetListModeFavorites();
+        else
+            SetListModeAll();
+    }
+
+    public void OnFavoritePullGesture()
+    {
+        ToggleFavoriteFocusedOutfit();
+    }
+
+    public void OnGestureSwipeUp()
+    {
+        MoveFocus(1);
+    }
+
+    public void OnGestureSwipeDown()
+    {
+        MoveFocus(-1);
+    }
+
+    public void OnGestureSwipeLeft()
+    {
+        MoveCategory(-1);
+    }
+
+    public void OnGestureSwipeRight()
+    {
+        MoveCategory(1);
+    }
+
+    public void OnGestureFistHoldConfirmed()
+    {
+        ConfirmFocusedOutfit();
+    }
+
+    public void OnGestureFavoritePull()
+    {
+        ToggleFavoriteFocusedOutfit();
+    }
+
+    public void OnGestureToggleListMode()
+    {
+        ToggleListMode();
     }
 
     public void SelectUpper(int index)
@@ -233,32 +560,56 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void RebuildCarousel()
     {
-        if (carouselContent == null)
+        RebuildCarousel(-2, 2);
+    }
+
+    private void RebuildCarousel(int minOffset, int maxOffset)
+    {
+        if (verticalCarouselContent == null)
             return;
 
-        ClearChildren(carouselContent);
+        ClearChildren(verticalCarouselContent);
         outfitCards.Clear();
 
-        int count = GetCategoryCount(activeCategory);
+        int count = GetFocusedCount(activeCategory);
         if (count == 0)
         {
-            CreateComingSoonCard(carouselContent, activeCategory);
+            CreateVerticalPlaceholderCard(verticalCarouselContent, currentListMode == ListMode.Favorites ? "찜한 옷이 없습니다" : "Coming Soon");
+            RefreshModeToggleVisualState();
             return;
         }
 
-        for (int i = 0; i < count; i++)
+        int focusIndex = GetFocusedIndex(activeCategory);
+
+        for (int offset = minOffset; offset <= maxOffset; offset++)
         {
-            int index = i;
-            OutfitCardButton card = CreateOutfitCard(carouselContent, activeCategory, index);
-            card.button.onClick.AddListener(() => SelectOutfit(activeCategory, index));
-            card.favoriteButton.onClick.AddListener(() => ToggleFavorite(activeCategory, index));
+            int index = GetCircularIndex(focusIndex + offset, count);
+            DbOutfit favoriteOutfit = currentListMode == ListMode.Favorites ? GetFilteredFavoriteOutfitAt(index) : null;
+            string categoryCode = favoriteOutfit != null ? favoriteOutfit.unity_category_code : activeCategory;
+            int outfitIndex = favoriteOutfit != null ? favoriteOutfit.unity_outfit_index : index;
+            int offsetSnapshot = offset;
+
+            GameObject slot = CreateVerticalCardSlot(verticalCarouselContent, offsetSnapshot);
+            OutfitCardButton card = CreateVerticalOutfitCard(slot.transform, categoryCode, outfitIndex, offsetSnapshot);
+            card.button.onClick.AddListener(() =>
+            {
+                if (offsetSnapshot == 0)
+                    ConfirmFocusedOutfit();
+                else
+                    SetFocusedIndex(activeCategory, index);
+
+                RebuildCarousel();
+                RefreshCategoryInfoPanel();
+                ConfirmFocusedOutfit();
+            });
+            card.favoriteButton.onClick.AddListener(() => ToggleFavorite(categoryCode, outfitIndex));
             outfitCards.Add(card);
         }
 
         RefreshSelectedCardState();
-
-        if (carouselScrollRect != null)
-            carouselScrollRect.horizontalNormalizedPosition = 0f;
+        RectTransform root = verticalCarouselContent as RectTransform;
+        RefreshCoverFlowVisuals(root != null ? root.anchoredPosition.y : 0f);
+        RefreshModeToggleVisualState();
     }
 
     private void RefreshCurrentOutfitPanel()
@@ -301,11 +652,148 @@ public class FitRoomMainUI : MonoBehaviour
         for (int i = 0; i < outfitCards.Count; i++)
         {
             OutfitCardButton card = outfitCards[i];
-            bool selected = IsSelected(card.categoryCode, card.index);
+            bool selected = card.isFocused;
             bool favorite = IsFavorite(card.categoryCode, card.index);
             card.SetSelected(selected, blue);
-            card.SetFavorite(favorite, cyan);
+            card.SetFavorite(favorite, new Color(1f, 0.176f, 0.333f, 1f));
         }
+    }
+
+    private void RefreshCoverFlowVisuals(float rootOffsetY)
+    {
+        for (int i = 0; i < outfitCards.Count; i++)
+        {
+            OutfitCardButton card = outfitCards[i];
+            if (card == null || card.slotRectTransform == null)
+                continue;
+
+            ApplyCoverFlowVisual(card, card.slotRectTransform.anchoredPosition.y + rootOffsetY);
+        }
+    }
+
+    private void ApplyCoverFlowVisual(OutfitCardButton card, float y)
+    {
+        float distance = Mathf.Abs(y);
+        float normalized = Mathf.Clamp01(distance / CarouselFarDistance);
+        float scale = Mathf.Lerp(1f, 0.62f, normalized);
+        float alpha = Mathf.Lerp(1f, 0.45f, normalized);
+        bool focused = normalized < 0.16f;
+
+        if (card.rectTransform != null)
+            card.rectTransform.localScale = new Vector3(scale, scale, 1f);
+
+        if (card.canvasGroup != null)
+            card.canvasGroup.alpha = alpha;
+
+        if (card.backgroundImage != null)
+        {
+            Color focusColor = new Color(0.08f, 0.13f, 0.2f, 0.97f);
+            Color farColor = new Color(0.05f, 0.065f, 0.09f, 0.76f);
+            card.backgroundImage.color = Color.Lerp(focusColor, farColor, normalized);
+        }
+
+        card.SetSelected(focused, blue);
+
+        if (card.nameText != null)
+            card.nameText.color = Color.Lerp(Color.white, new Color(1f, 1f, 1f, 0.7f), normalized);
+
+        if (focused && card.slotRectTransform != null)
+            card.slotRectTransform.SetAsLastSibling();
+    }
+
+    private bool IsPointerOverFocusedCard(Vector2 screenPosition)
+    {
+        OutfitCardButton focusedCard = GetFocusedOutfitCard();
+        if (focusedCard == null || focusedCard.rectTransform == null)
+            return false;
+
+        return RectTransformUtility.RectangleContainsScreenPoint(focusedCard.rectTransform, screenPosition, GetUICamera());
+    }
+
+    private bool IsPointerOverFavoriteDropZone(Vector2 screenPosition)
+    {
+        if (favoriteDropZoneRect == null)
+            return false;
+
+        return RectTransformUtility.RectangleContainsScreenPoint(favoriteDropZoneRect, screenPosition, GetUICamera());
+    }
+
+    private OutfitCardButton GetFocusedOutfitCard()
+    {
+        for (int i = 0; i < outfitCards.Count; i++)
+        {
+            if (outfitCards[i] != null && outfitCards[i].isFocused)
+                return outfitCards[i];
+        }
+
+        return null;
+    }
+
+    private void CreateFavoriteGhostCard(Vector2 screenPosition)
+    {
+        DestroyFavoriteGhostCard();
+
+        if (mainPanel == null)
+            return;
+
+        string categoryCode = activeCategory;
+        int index = GetFocusedIndex(activeCategory);
+        DbOutfit focusedOutfit = GetFocusedDbOutfit();
+        if (focusedOutfit != null)
+        {
+            categoryCode = focusedOutfit.unity_category_code;
+            index = focusedOutfit.unity_outfit_index;
+        }
+
+        favoriteGhostCard = CreatePanelObject("FavoriteGhostCard", mainPanel.transform, new Color(0.08f, 0.13f, 0.2f, 0.88f), new Color(1f, 0.176f, 0.333f, 0.95f));
+        favoriteGhostRect = favoriteGhostCard.GetComponent<RectTransform>();
+        SetRect(favoriteGhostRect, Vector2.zero, new Vector2(128f, 104f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        favoriteGhostCard.transform.SetAsLastSibling();
+
+        CanvasGroup group = favoriteGhostCard.AddComponent<CanvasGroup>();
+        group.alpha = 0.92f;
+        group.blocksRaycasts = false;
+
+        GameObject thumbnail = CreateRect("Thumbnail", favoriteGhostCard.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+        SetRect(thumbnail.GetComponent<RectTransform>(), new Vector2(0f, -10f), new Vector2(98f, 58f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+        Image thumbnailImage = thumbnail.AddComponent<Image>();
+        thumbnailImage.sprite = GetThumbnail(categoryCode, index);
+        thumbnailImage.color = thumbnailImage.sprite != null ? Color.white : new Color(0.22f, 0.25f, 0.31f, 1f);
+        thumbnailImage.preserveAspect = true;
+
+        Text name = CreateText("NameText", favoriteGhostCard.transform, GetOutfitName(categoryCode, index), 13, FontStyle.Bold, TextAnchor.MiddleCenter);
+        SetRect(name.rectTransform, new Vector2(0f, 8f), new Vector2(108f, 24f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
+
+        UpdateFavoriteGhostPosition(screenPosition);
+    }
+
+    private void UpdateFavoriteGhostPosition(Vector2 screenPosition)
+    {
+        if (favoriteGhostRect == null || mainPanel == null)
+            return;
+
+        RectTransform mainRect = mainPanel.GetComponent<RectTransform>();
+        Vector2 localPosition;
+        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(mainRect, screenPosition, GetUICamera(), out localPosition))
+            favoriteGhostRect.anchoredPosition = localPosition;
+    }
+
+    private void DestroyFavoriteGhostCard()
+    {
+        if (favoriteGhostCard != null)
+            DestroyRuntimeObject(favoriteGhostCard);
+
+        favoriteGhostCard = null;
+        favoriteGhostRect = null;
+    }
+
+    private Camera GetUICamera()
+    {
+        Canvas canvas = GetComponentInParent<Canvas>();
+        if (canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+            return null;
+
+        return canvas.worldCamera;
     }
 
     private void RefreshCategoryInfoPanel()
@@ -316,14 +804,14 @@ public class FitRoomMainUI : MonoBehaviour
         if (activeCategory == CategoryUpper)
         {
             categoryInfoTitleText.text = "상의 안내";
-            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0, "원하는 상의를 선택하면 AR로 착용해 볼 수 있습니다.");
-            SetCategoryInfoThumbnail(GetThumbnail(CategoryUpper, outfitManager != null ? outfitManager.currentUpperIndex : 0), "T");
+            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryUpper, GetFocusedIndex(CategoryUpper), "원하는 상의를 선택하면 AR로 착용해 볼 수 있습니다.");
+            SetCategoryInfoThumbnail(GetThumbnail(CategoryUpper, GetFocusedIndex(CategoryUpper)), "T");
         }
         else if (activeCategory == CategoryLower)
         {
             categoryInfoTitleText.text = "하의 안내";
-            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0, "원하는 하의를 선택하면 AR로 착용해 볼 수 있습니다.");
-            SetCategoryInfoThumbnail(GetThumbnail(CategoryLower, outfitManager != null ? outfitManager.currentLowerIndex : 0), "P");
+            categoryInfoBodyText.text = GetSelectedOutfitDescription(CategoryLower, GetFocusedIndex(CategoryLower), "원하는 하의를 선택하면 AR로 착용해 볼 수 있습니다.");
+            SetCategoryInfoThumbnail(GetThumbnail(CategoryLower, GetFocusedIndex(CategoryLower)), "P");
         }
         else if (activeCategory == CategoryHat)
         {
@@ -601,6 +1089,8 @@ public class FitRoomMainUI : MonoBehaviour
             }
 
             RebuildWishlistList();
+            if (currentListMode == ListMode.Favorites)
+                RebuildCarousel();
             RefreshSelectedCardState();
         });
     }
@@ -623,6 +1113,9 @@ public class FitRoomMainUI : MonoBehaviour
 
                 if (wishlistPanel != null && wishlistPanel.activeSelf)
                     StartCoroutine(LoadWishlistRoutine());
+
+                if (currentListMode == ListMode.Favorites)
+                    StartCoroutine(LoadWishlistRoutine());
             }
             else
             {
@@ -643,6 +1136,9 @@ public class FitRoomMainUI : MonoBehaviour
                 favoriteOutfitIds.Remove(outfit.outfit_id);
                 RefreshSelectedCardState();
                 StartCoroutine(LoadWishlistRoutine());
+
+                if (currentListMode == ListMode.Favorites)
+                    RebuildCarousel();
             }
             else
             {
@@ -817,7 +1313,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void EnsureRuntimeLayout()
     {
-        if (runtimeLayoutBuilt && mainPanel != null && carouselContent != null)
+        if (runtimeLayoutBuilt && mainPanel != null && verticalCarouselContent != null)
             return;
 
         Canvas canvas = GetComponentInParent<Canvas>();
@@ -836,7 +1332,6 @@ public class FitRoomMainUI : MonoBehaviour
         CreateCurrentOutfitPanel(mainPanel.transform);
         CreatePreviewFrame(mainPanel.transform);
         CreateRightControlPanel(mainPanel.transform);
-        CreateOutfitCarouselPanel(mainPanel.transform);
         wishlistPanel = CreateWishlistPanel(mainPanel.transform);
         loginPanel = CreateLoginPanel(mainPanel.transform);
         registerPanel = CreateRegisterPanel(mainPanel.transform);
@@ -973,20 +1468,62 @@ public class FitRoomMainUI : MonoBehaviour
 
     private void CreateRightControlPanel(Transform parent)
     {
-        GameObject panel = CreateAnchoredPanel("RightControlPanel", parent, new Vector2(-40f, -145f), new Vector2(540f, 550f), new Vector2(1f, 1f), glassColor);
+        GameObject panel = CreateRect("RightGesturePanel", parent, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        SetRect(panel.GetComponent<RectTransform>(), new Vector2(-40f, -108f), new Vector2(540f, 930f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+        CreateModeTogglePanel(panel.transform);
         CreateCategoryTabPanel(panel.transform);
-        CreateCategoryInfoPanel(panel.transform);
-        CreateFilterSortPanel(panel.transform);
+        CreateVerticalCarouselPanel(panel.transform);
+        CreateFavoriteDropZone(panel.transform);
+    }
+
+    private void CreateModeTogglePanel(Transform parent)
+    {
+        GameObject panel = CreateRect("ModeTogglePanel", parent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        SetRect(panel.GetComponent<RectTransform>(), new Vector2(184f, -24f), new Vector2(326f, 48f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        HorizontalLayoutGroup layout = panel.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 8f;
+        layout.childControlHeight = true;
+        layout.childControlWidth = true;
+        layout.childForceExpandHeight = true;
+        layout.childForceExpandWidth = true;
+
+        Button all = CreateModeButton(panel.transform, "AllListModeButton", "전체 목록", false);
+        all.onClick.AddListener(SetListModeAll);
+
+        Button favorites = CreateModeButton(panel.transform, "FavoriteListModeButton", "찜 목록", true);
+        favorites.onClick.AddListener(SetListModeFavorites);
+    }
+
+    private Button CreateModeButton(Transform parent, string objectName, string label, bool favorites)
+    {
+        GameObject obj = CreatePanelObject(objectName, parent, new Color(0.057f, 0.078f, 0.114f, 0.92f), new Color(1f, 1f, 1f, 0.16f));
+        Button button = obj.AddComponent<Button>();
+        button.targetGraphic = obj.GetComponent<Image>();
+        Text text = CreateText("Label", obj.transform, label, 18, FontStyle.Bold, TextAnchor.MiddleCenter);
+        Stretch(text.rectTransform, 8f, 4f, -8f, -4f);
+
+        if (favorites)
+        {
+            modeFavoritesText = text;
+            modeFavoritesBorder = obj.GetComponent<OutlineHolder>().outlineImage;
+        }
+        else
+        {
+            modeAllText = text;
+            modeAllBorder = obj.GetComponent<OutlineHolder>().outlineImage;
+        }
+
+        return button;
     }
 
     private void CreateCategoryTabPanel(Transform parent)
     {
-        GameObject tabs = CreateRect("CategoryTabPanel", parent, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f));
-        tabs.GetComponent<RectTransform>().anchoredPosition = new Vector2(0f, -24f);
-        tabs.GetComponent<RectTransform>().sizeDelta = new Vector2(-48f, 78f);
+        GameObject tabs = CreateRect("CategoryIndicatorPanel", parent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+        SetRect(tabs.GetComponent<RectTransform>(), new Vector2(184f, -84f), new Vector2(326f, 52f), new Vector2(0f, 1f), new Vector2(0f, 1f));
 
         HorizontalLayoutGroup layout = tabs.AddComponent<HorizontalLayoutGroup>();
-        layout.spacing = 10f;
+        layout.spacing = 7f;
         layout.childControlHeight = true;
         layout.childControlWidth = true;
         layout.childForceExpandHeight = true;
@@ -1005,15 +1542,90 @@ public class FitRoomMainUI : MonoBehaviour
         button.transition = Selectable.Transition.ColorTint;
         button.targetGraphic = obj.GetComponent<Image>();
         button.onClick.AddListener(() => SelectCategory(categoryCode));
-        obj.AddComponent<LayoutElement>().preferredHeight = 68f;
+        obj.AddComponent<LayoutElement>().preferredHeight = 52f;
 
-        Text text = CreateText("Label", obj.transform, icon + "\n" + label, 16, FontStyle.Bold, TextAnchor.MiddleCenter);
+        Text text = CreateText("Label", obj.transform, icon + "\n" + label, 13, FontStyle.Bold, TextAnchor.MiddleCenter);
         text.lineSpacing = 1.05f;
         Stretch(text.rectTransform, 4f, 4f, -4f, -4f);
 
         categoryButtons[categoryCode] = button;
         categoryButtonTexts[categoryCode] = text;
         categoryButtonBorders[categoryCode] = obj.GetComponent<OutlineHolder>().outlineImage;
+    }
+
+    private void CreateVerticalCarouselPanel(Transform parent)
+    {
+        GameObject panel = CreateAnchoredPanel("VerticalOutfitCarousel", parent, new Vector2(184f, -176f), new Vector2(326f, 820f), new Vector2(0f, 1f), new Color(0f, 0f, 0f, 0f));
+        Image panelImage = panel.GetComponent<Image>();
+        if (panelImage != null)
+            panelImage.raycastTarget = false;
+
+        OutlineHolder panelOutline = panel.GetComponent<OutlineHolder>();
+        if (panelOutline != null && panelOutline.outlineImage != null)
+            panelOutline.outlineImage.color = new Color(0f, 0f, 0f, 0f);
+
+        Button up = CreateSmallIconButton("UpButton", panel.transform, "^", new Vector2(-131f, -12f));
+        SetRect(up.GetComponent<RectTransform>(), new Vector2(0f, -2f), new Vector2(72f, 36f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+        up.onClick.AddListener(() => MoveFocus(-1));
+
+        Button down = CreateSmallIconButton("DownButton", panel.transform, "v", new Vector2(-131f, -772f));
+        SetRect(down.GetComponent<RectTransform>(), new Vector2(0f, 2f), new Vector2(72f, 36f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
+        down.onClick.AddListener(() => MoveFocus(1));
+
+        GameObject slotsRoot = CreateRect("CardSlotsRoot", panel.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        slotsRoot.GetComponent<RectTransform>().anchoredPosition = new Vector2(0f, -4f);
+        slotsRoot.GetComponent<RectTransform>().sizeDelta = new Vector2(300f, 712f);
+
+        verticalCarouselContent = slotsRoot.transform;
+    }
+
+    private void CreateFavoriteDropZone(Transform parent)
+    {
+        GameObject zone = CreateAnchoredPanel("FavoriteDropZone", parent, new Vector2(24f, -650f), new Vector2(138f, 138f), new Vector2(0f, 1f), new Color(0.12f, 0.03f, 0.07f, 0.42f));
+        favoriteDropZoneRect = zone.GetComponent<RectTransform>();
+        favoriteDropZoneBorder = zone.GetComponent<OutlineHolder>().outlineImage;
+        if (favoriteDropZoneBorder != null)
+            favoriteDropZoneBorder.color = new Color(1f, 0.176f, 0.333f, 0f);
+
+        AddDashedBorder(zone.transform, new Vector2(138f, 138f), new Color(1f, 0.176f, 0.333f, 0.88f));
+
+        favoriteDropZoneText = CreateText("DropZoneLabel", zone.transform, "♥\n찜", 26, FontStyle.Bold, TextAnchor.MiddleCenter);
+        favoriteDropZoneText.color = new Color(1f, 0.78f, 0.84f, 1f);
+        Stretch(favoriteDropZoneText.rectTransform, 12f, 8f, -12f, -8f);
+    }
+
+    private void AddDashedBorder(Transform parent, Vector2 size, Color color)
+    {
+        const float segment = 14f;
+        const float gap = 8f;
+        const float thickness = 3f;
+        float halfWidth = size.x * 0.5f;
+        float halfHeight = size.y * 0.5f;
+
+        int horizontalCount = Mathf.FloorToInt((size.x - 20f) / (segment + gap));
+        for (int i = 0; i < horizontalCount; i++)
+        {
+            float x = -halfWidth + 10f + i * (segment + gap) + segment * 0.5f;
+            CreateDash(parent, "DashTop_" + i, new Vector2(x, halfHeight - 3f), new Vector2(segment, thickness), color);
+            CreateDash(parent, "DashBottom_" + i, new Vector2(x, -halfHeight + 3f), new Vector2(segment, thickness), color);
+        }
+
+        int verticalCount = Mathf.FloorToInt((size.y - 20f) / (segment + gap));
+        for (int i = 0; i < verticalCount; i++)
+        {
+            float y = -halfHeight + 10f + i * (segment + gap) + segment * 0.5f;
+            CreateDash(parent, "DashLeft_" + i, new Vector2(-halfWidth + 3f, y), new Vector2(thickness, segment), color);
+            CreateDash(parent, "DashRight_" + i, new Vector2(halfWidth - 3f, y), new Vector2(thickness, segment), color);
+        }
+    }
+
+    private void CreateDash(Transform parent, string objectName, Vector2 position, Vector2 size, Color color)
+    {
+        GameObject dash = CreateRect(objectName, parent, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        SetRect(dash.GetComponent<RectTransform>(), position, size, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        Image image = dash.AddComponent<Image>();
+        image.color = color;
+        image.raycastTarget = false;
     }
 
     private void CreateCategoryInfoPanel(Transform parent)
@@ -1134,6 +1746,78 @@ public class FitRoomMainUI : MonoBehaviour
         cardButton.nameText = name;
         cardButton.checkMark = check.gameObject;
         return cardButton;
+    }
+
+    private GameObject CreateVerticalCardSlot(Transform parent, int offsetFromFocus)
+    {
+        bool focused = offsetFromFocus == 0;
+        string slotName = focused ? "CardSlot_2_Focus" : "CardSlot_" + offsetFromFocus;
+        GameObject slot = CreateRect(slotName, parent, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        SetRect(slot.GetComponent<RectTransform>(), new Vector2(0f, -offsetFromFocus * CarouselSlotSpacing), new Vector2(236f, 186f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        return slot;
+    }
+
+    private OutfitCardButton CreateVerticalOutfitCard(Transform parent, string categoryCode, int index, int offsetFromFocus)
+    {
+        bool focused = offsetFromFocus == 0;
+        Vector2 cardSize = new Vector2(236f, 186f);
+        Color background = focused ? new Color(0.08f, 0.13f, 0.2f, 0.97f) : new Color(0.05f, 0.065f, 0.09f, 0.76f);
+        Color border = focused ? blue : new Color(1f, 1f, 1f, 0.14f);
+
+        GameObject card = CreatePanelObject("OutfitCard", parent, background, border);
+        SetRect(card.GetComponent<RectTransform>(), Vector2.zero, cardSize, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+        CanvasGroup canvasGroup = card.AddComponent<CanvasGroup>();
+        Transform selectedBorder = card.transform.Find("Border");
+        if (selectedBorder != null)
+            selectedBorder.name = "SelectedBorder";
+
+        Button button = card.AddComponent<Button>();
+        button.targetGraphic = card.GetComponent<Image>();
+
+        Vector2 thumbnailSize = new Vector2(184f, 116f);
+        GameObject thumbnail = CreateRect("Thumbnail", card.transform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+        SetRect(thumbnail.GetComponent<RectTransform>(), new Vector2(0f, -20f), thumbnailSize, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+        Image thumbnailImage = thumbnail.AddComponent<Image>();
+        thumbnailImage.sprite = GetThumbnail(categoryCode, index);
+        thumbnailImage.color = thumbnailImage.sprite != null ? Color.white : new Color(0.22f, 0.25f, 0.31f, focused ? 1f : 0.82f);
+        thumbnailImage.preserveAspect = true;
+
+        Text name = CreateText("NameText", card.transform, GetOutfitName(categoryCode, index), 20, FontStyle.Bold, TextAnchor.MiddleCenter);
+        SetRect(name.rectTransform, new Vector2(0f, 12f), new Vector2(cardSize.x - 46f, 30f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
+        name.color = focused ? Color.white : new Color(1f, 1f, 1f, 0.78f);
+
+        Button heart = CreateSmallIconButton("FavoriteButton", card.transform, "♡", new Vector2(-8f, -8f));
+        SetRect(heart.GetComponent<RectTransform>(), new Vector2(-10f, -10f), new Vector2(42f, 42f), new Vector2(1f, 1f), new Vector2(1f, 1f));
+
+        Text check = CreateText("CheckMark", card.transform, "✓", 28, FontStyle.Bold, TextAnchor.MiddleCenter);
+        check.color = cyan;
+        SetRect(check.rectTransform, new Vector2(12f, -10f), new Vector2(34f, 34f), new Vector2(0f, 1f), new Vector2(0f, 1f));
+
+        OutfitCardButton cardButton = card.AddComponent<OutfitCardButton>();
+        cardButton.categoryCode = categoryCode;
+        cardButton.index = index;
+        cardButton.rectTransform = card.GetComponent<RectTransform>();
+        cardButton.slotRectTransform = parent as RectTransform;
+        cardButton.canvasGroup = canvasGroup;
+        cardButton.backgroundImage = card.GetComponent<Image>();
+        cardButton.button = button;
+        cardButton.favoriteButton = heart;
+        cardButton.borderImage = card.GetComponent<OutlineHolder>().outlineImage;
+        cardButton.favoriteText = heart.GetComponentInChildren<Text>();
+        cardButton.nameText = name;
+        cardButton.checkMark = check.gameObject;
+        cardButton.isFocused = focused;
+        return cardButton;
+    }
+
+    private void CreateVerticalPlaceholderCard(Transform parent, string message)
+    {
+        GameObject card = CreatePanelObject("VerticalCarouselPlaceholder", parent, new Color(0.05f, 0.065f, 0.09f, 0.82f), new Color(1f, 1f, 1f, 0.16f));
+        SetRect(card.GetComponent<RectTransform>(), Vector2.zero, new Vector2(300f, 120f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+
+        Text title = CreateText("Message", card.transform, message, 22, FontStyle.Bold, TextAnchor.MiddleCenter);
+        title.color = mutedText;
+        Stretch(title.rectTransform, 16f, 16f, -16f, -16f);
     }
 
     private void CreateComingSoonCard(Transform parent, string categoryCode)
@@ -1570,6 +2254,108 @@ public class FitRoomMainUI : MonoBehaviour
             panel.SetActive(active);
     }
 
+    private int GetCircularIndex(int index, int count)
+    {
+        if (count <= 0)
+            return -1;
+
+        return ((index % count) + count) % count;
+    }
+
+    private int GetFocusedCount(string categoryCode)
+    {
+        if (currentListMode == ListMode.Favorites)
+            return GetFilteredFavoriteOutfits().Count;
+
+        return GetCategoryCount(categoryCode);
+    }
+
+    private int GetFocusedIndex(string categoryCode)
+    {
+        if (categoryCode == CategoryUpper)
+            return focusedUpperIndex;
+
+        if (categoryCode == CategoryLower)
+            return focusedLowerIndex;
+
+        if (categoryCode == CategoryHat)
+            return focusedHatIndex;
+
+        if (categoryCode == CategoryShoes)
+            return focusedShoesIndex;
+
+        return 0;
+    }
+
+    private void SetFocusedIndex(string categoryCode, int index)
+    {
+        int count = GetFocusedCount(categoryCode);
+        int safeIndex = GetCircularIndex(index, count);
+        if (safeIndex < 0)
+            safeIndex = 0;
+
+        if (categoryCode == CategoryUpper)
+            focusedUpperIndex = safeIndex;
+        else if (categoryCode == CategoryLower)
+            focusedLowerIndex = safeIndex;
+        else if (categoryCode == CategoryHat)
+            focusedHatIndex = safeIndex;
+        else if (categoryCode == CategoryShoes)
+            focusedShoesIndex = safeIndex;
+    }
+
+    private List<DbOutfit> GetFilteredFavoriteOutfits()
+    {
+        List<DbOutfit> items = new List<DbOutfit>();
+
+        for (int i = 0; i < wishlistOutfits.Count; i++)
+        {
+            DbOutfit outfit = wishlistOutfits[i];
+            if (outfit == null)
+                continue;
+
+            if (outfit.unity_category_code == activeCategory || outfit.category_code == activeCategory)
+                items.Add(outfit);
+        }
+
+        items.Sort((a, b) => a.unity_outfit_index.CompareTo(b.unity_outfit_index));
+        return items;
+    }
+
+    private DbOutfit GetFilteredFavoriteOutfitAt(int index)
+    {
+        List<DbOutfit> items = GetFilteredFavoriteOutfits();
+        if (items.Count == 0)
+            return null;
+
+        return items[GetCircularIndex(index, items.Count)];
+    }
+
+    private DbOutfit GetFocusedDbOutfit()
+    {
+        if (currentListMode == ListMode.Favorites)
+            return GetFilteredFavoriteOutfitAt(GetFocusedIndex(activeCategory));
+
+        return GetDbOutfit(activeCategory, GetFocusedIndex(activeCategory));
+    }
+
+    private void RefreshModeToggleVisualState()
+    {
+        bool favorites = currentListMode == ListMode.Favorites;
+
+        if (modeAllBorder != null)
+            modeAllBorder.color = favorites ? new Color(1f, 1f, 1f, 0.16f) : blue;
+
+        if (modeFavoritesBorder != null)
+            modeFavoritesBorder.color = favorites ? new Color(1f, 0.176f, 0.333f, 1f) : new Color(1f, 1f, 1f, 0.16f);
+
+        if (modeAllText != null)
+            modeAllText.color = favorites ? mutedText : Color.white;
+
+        if (modeFavoritesText != null)
+            modeFavoritesText.color = favorites ? Color.white : mutedText;
+    }
+
     private void NudgeCarousel(float delta)
     {
         if (carouselScrollRect == null)
@@ -1666,6 +2452,23 @@ public class FitRoomMainUI : MonoBehaviour
             return "모자";
 
         if (outfit != null && outfit.unity_category_code == CategoryShoes)
+            return "신발";
+
+        return "의상";
+    }
+
+    private string GetCategoryDisplayName(string categoryCode)
+    {
+        if (categoryCode == CategoryUpper)
+            return "상의";
+
+        if (categoryCode == CategoryLower)
+            return "하의";
+
+        if (categoryCode == CategoryHat)
+            return "모자";
+
+        if (categoryCode == CategoryShoes)
             return "신발";
 
         return "의상";
@@ -1843,12 +2646,17 @@ public class OutfitCardButton : MonoBehaviour
 {
     public string categoryCode;
     public int index;
+    public RectTransform rectTransform;
+    public RectTransform slotRectTransform;
+    public CanvasGroup canvasGroup;
+    public Image backgroundImage;
     public Button button;
     public Button favoriteButton;
     public Image borderImage;
     public Text favoriteText;
     public Text nameText;
     public GameObject checkMark;
+    public bool isFocused;
 
     public void SetSelected(bool selected, Color selectedColor)
     {
