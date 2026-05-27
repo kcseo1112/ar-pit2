@@ -114,6 +114,7 @@ public class FitRoomMainUI : MonoBehaviour
     private InputField currentPasswordInput;
     private InputField newPasswordInput;
     private InputField newPasswordConfirmInput;
+    private VirtualKeyboard virtualKeyboard;
     private int loggedInUserId;
     private string loggedInUserName;
     private string loggedInUserPhone;
@@ -155,6 +156,9 @@ public class FitRoomMainUI : MonoBehaviour
 
     void Update()
     {
+        if (IsInputPanelOpen())
+            return;
+
         if (Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.W))
             OnGestureSwipeUp();
 
@@ -372,16 +376,25 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void OnHandPressStart(Vector2 screenPosition)
     {
+        if (IsInputPanelOpen())
+            return;
+
         BeginFavoritePress(screenPosition, true, handPressFocusPadding);
     }
 
     public void OnHandPressMove(Vector2 screenPosition)
     {
+        if (IsInputPanelOpen())
+            return;
+
         UpdateFavoritePress(screenPosition);
     }
 
     public void OnHandPressRelease(Vector2 screenPosition)
     {
+        if (IsInputPanelOpen())
+            return;
+
         EndFavoritePress(screenPosition);
     }
 
@@ -465,41 +478,65 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void OnFavoritePullGesture()
     {
+        if (IsInputPanelOpen())
+            return;
+
         ToggleFavoriteFocusedOutfit();
     }
 
     public void OnGestureSwipeUp()
     {
+        if (IsInputPanelOpen())
+            return;
+
         MoveFocus(1);
     }
 
     public void OnGestureSwipeDown()
     {
+        if (IsInputPanelOpen())
+            return;
+
         MoveFocus(-1);
     }
 
     public void OnGestureSwipeLeft()
     {
+        if (IsInputPanelOpen())
+            return;
+
         MoveCategory(-1);
     }
 
     public void OnGestureSwipeRight()
     {
+        if (IsInputPanelOpen())
+            return;
+
         MoveCategory(1);
     }
 
     public void OnGestureFistHoldConfirmed()
     {
+        if (IsInputPanelOpen())
+            return;
+
         ConfirmFocusedOutfit();
     }
 
     public void OnGestureFavoritePull()
     {
+        if (IsInputPanelOpen())
+            return;
+
         ToggleFavoriteFocusedOutfit();
     }
 
     public void OnGestureThumbsUpFavorite()
     {
+        if (IsInputPanelOpen())
+            return;
+
         if (favoriteAutoDropRoutine != null)
             StopCoroutine(favoriteAutoDropRoutine);
 
@@ -508,6 +545,9 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void OnGestureToggleListMode()
     {
+        if (IsInputPanelOpen())
+            return;
+
         ToggleListMode();
     }
 
@@ -523,6 +563,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void ShowMainPanel()
     {
+        HideVirtualKeyboard();
         SetPanel(mainPanel, true);
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, false);
@@ -532,6 +573,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void ShowLoginPanel()
     {
+        HideVirtualKeyboard();
         SetPanel(mainPanel, true);
         SetPanel(loginPanel, true);
         SetPanel(registerPanel, false);
@@ -547,6 +589,7 @@ public class FitRoomMainUI : MonoBehaviour
             return;
         }
 
+        HideVirtualKeyboard();
         SetPanel(mainPanel, true);
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, false);
@@ -557,6 +600,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void ShowRegisterPanel()
     {
+        HideVirtualKeyboard();
         SetPanel(mainPanel, true);
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, true);
@@ -566,6 +610,7 @@ public class FitRoomMainUI : MonoBehaviour
 
     public void ShowWishlistPanel()
     {
+        HideVirtualKeyboard();
         SetPanel(mainPanel, true);
         SetPanel(loginPanel, false);
         SetPanel(registerPanel, false);
@@ -1492,6 +1537,8 @@ public class FitRoomMainUI : MonoBehaviour
         loginPanel = CreateLoginPanel(mainPanel.transform);
         registerPanel = CreateRegisterPanel(mainPanel.transform);
         userInfoPanel = CreateUserInfoPanel(mainPanel.transform);
+        EnsureVirtualKeyboard();
+        RegisterVirtualKeyboardInputs();
 
         EnsureEventSystem();
         RefreshCurrentOutfitPanel();
@@ -1513,6 +1560,90 @@ public class FitRoomMainUI : MonoBehaviour
 
         controller.SetParent(canvasObject.transform, false);
         return canvas;
+    }
+
+    private void EnsureVirtualKeyboard()
+    {
+        if (mainPanel == null)
+            return;
+
+        if (virtualKeyboard == null)
+            virtualKeyboard = mainPanel.GetComponentInChildren<VirtualKeyboard>(true);
+
+        if (virtualKeyboard == null)
+            virtualKeyboard = mainPanel.AddComponent<VirtualKeyboard>();
+
+        virtualKeyboard.OnEnterPressed = HandleVirtualKeyboardEnter;
+    }
+
+    private void RegisterVirtualKeyboardInputs()
+    {
+        if (virtualKeyboard == null)
+            return;
+
+        virtualKeyboard.RegisterInputField(loginPhoneInput, VirtualKeyboard.KeyboardMode.Number);
+        virtualKeyboard.RegisterInputField(loginPasswordInput, VirtualKeyboard.KeyboardMode.Password);
+        virtualKeyboard.RegisterInputField(registerNameInput, VirtualKeyboard.KeyboardMode.Text);
+        virtualKeyboard.RegisterInputField(registerPhoneInput, VirtualKeyboard.KeyboardMode.Number);
+        virtualKeyboard.RegisterInputField(registerPasswordInput, VirtualKeyboard.KeyboardMode.Password);
+        virtualKeyboard.RegisterInputField(registerPasswordConfirmInput, VirtualKeyboard.KeyboardMode.Password);
+    }
+
+    private void HideVirtualKeyboard()
+    {
+        if (virtualKeyboard != null)
+            virtualKeyboard.Hide();
+    }
+
+    private bool IsInputPanelOpen()
+    {
+        return IsPanelActive(loginPanel) || IsPanelActive(registerPanel) || IsPanelActive(userInfoPanel);
+    }
+
+    private bool IsPanelActive(GameObject panel)
+    {
+        return panel != null && panel.activeInHierarchy;
+    }
+
+    private void HandleVirtualKeyboardEnter(InputField field, VirtualKeyboard.KeyboardMode mode)
+    {
+        if (field == loginPhoneInput && loginPasswordInput != null)
+        {
+            virtualKeyboard.Show(loginPasswordInput, VirtualKeyboard.KeyboardMode.Password);
+            return;
+        }
+
+        if (field == loginPasswordInput)
+        {
+            StartCoroutine(LoginRoutine());
+            return;
+        }
+
+        if (field == registerNameInput && registerPhoneInput != null)
+        {
+            virtualKeyboard.Show(registerPhoneInput, VirtualKeyboard.KeyboardMode.Number);
+            return;
+        }
+
+        if (field == registerPhoneInput && registerPasswordInput != null)
+        {
+            virtualKeyboard.Show(registerPasswordInput, VirtualKeyboard.KeyboardMode.Password);
+            return;
+        }
+
+        if (field == registerPasswordInput && registerPasswordConfirmInput != null)
+        {
+            virtualKeyboard.Show(registerPasswordConfirmInput, VirtualKeyboard.KeyboardMode.Password);
+            return;
+        }
+
+        if (field == registerPasswordConfirmInput)
+        {
+            StartCoroutine(RegisterRoutine());
+            return;
+        }
+
+        HideVirtualKeyboard();
     }
 
     private GameObject CreateMainPanel(Transform parent)

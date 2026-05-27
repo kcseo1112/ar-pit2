@@ -4,6 +4,13 @@ Unity 기반 AR 가상 피팅룸 프로젝트입니다. 기존 ROMP/UDP 포즈 �
 
 ## 현재 구현 상태
 
+### Touch UI Keyboard
+
+- 로그인/회원가입 입력창을 터치하거나 클릭하면 Unity UI 기반 `VirtualKeyboard`가 화면 하단에 표시됩니다.
+- 전화번호 입력은 숫자 키패드, 이름/비밀번호 입력은 영문 키보드 모드로 연결했습니다.
+- 키보드는 Backspace, Space, Clear, Enter, Close, Shift, ABC/123 전환을 지원합니다.
+- 로그인/회원가입/사용자 정보 패널이 열려 있을 때는 의상 선택용 제스처와 테스트 키 입력이 동작하지 않도록 차단했습니다.
+
 ### Unity FitRoom UI
 
 - `FitRoomMainUI`를 스마트미러/AR 피팅룸 느낌의 고급 UI로 개편했습니다.
